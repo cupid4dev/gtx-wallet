@@ -7,7 +7,7 @@ const log = require('fancy-log')
 const { assign } = require('lodash')
 const watchify = require('watchify')
 const browserify = require('browserify')
-const envify = require('envify/custom')
+const envify = require('loose-envify/custom')
 const sourcemaps = require('gulp-sourcemaps')
 const sesify = require('sesify')
 const terser = require('gulp-terser-js')
@@ -18,6 +18,8 @@ const { makeStringTransform } = require('browserify-transform-tools')
 const conf = require('rc')('gtxwallet', {
   INFURA_PROJECT_ID: process.env.INFURA_PROJECT_ID,
 })
+
+const baseManifest = require('../../app/manifest/_base.json')
 
 const packageJSON = require('../../package.json')
 const { createTask, composeParallel, composeSeries, runInChildProcess } = require('./task')
@@ -86,6 +88,7 @@ function createScriptTasks ({ browserPlatforms, livereload }) {
       'background',
       'ui',
       'phishing-detect',
+      'initSentry',
     ]
 
     const standardSubtasks = standardBundles.map((filename) => {
@@ -315,22 +318,27 @@ function createScriptTasks ({ browserPlatforms, livereload }) {
     }
 
     // Inject variables into bundle
-    bundler.transform(envify({
-      METAMASK_DEBUG: opts.devMode,
-      METAMASK_ENVIRONMENT: environment,
-      NODE_ENV: opts.devMode ? 'development' : 'production',
-      IN_TEST: opts.testing ? 'true' : false,
-      PUBNUB_SUB_KEY: process.env.PUBNUB_SUB_KEY || '',
-      PUBNUB_PUB_KEY: process.env.PUBNUB_PUB_KEY || '',
-      ETH_GAS_STATION_API_KEY: process.env.ETH_GAS_STATION_API_KEY || '',
-      CONF: opts.devMode ? conf : ({}),
-      SENTRY_DSN: process.env.SENTRY_DSN,
-      INFURA_PROJECT_ID: opts.testing
-        ? '00000000000000000000000000000000'
-        : conf.INFURA_PROJECT_ID,
-    }), {
-      global: true,
-    })
+    bundler.transform(
+      envify({
+        METAMASK_DEBUG: opts.devMode,
+        METAMASK_ENVIRONMENT: environment,
+        METAMASK_VERSION: baseManifest.version,
+        METAMETRICS_PROJECT_ID: process.env.METAMETRICS_PROJECT_ID,
+        NODE_ENV: opts.devMode ? 'development' : 'production',
+        IN_TEST: opts.testing ? 'true' : false,
+        PUBNUB_SUB_KEY: process.env.PUBNUB_SUB_KEY || '',
+        PUBNUB_PUB_KEY: process.env.PUBNUB_PUB_KEY || '',
+        ETH_GAS_STATION_API_KEY: process.env.ETH_GAS_STATION_API_KEY || '',
+        CONF: opts.devMode ? conf : {},
+        SENTRY_DSN: process.env.SENTRY_DSN,
+        INFURA_PROJECT_ID: opts.testing
+          ? '00000000000000000000000000000000'
+          : conf.INFURA_PROJECT_ID,
+      }),
+      {
+        global: true,
+      },
+    )
 
     // Live reload - minimal rebundle on change
     if (opts.devMode) {

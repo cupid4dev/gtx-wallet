@@ -27,6 +27,9 @@
   "default_locale": "en",
   "background": {
     "scripts": [
+      "initSentry.js",
+      "lockdown.cjs",
+      "runLockdown.js",
       "bg-libs.js",
       "background.js"
     ],
@@ -47,14 +50,8 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "file://*/*",
-        "http://*/*",
-        "https://*/*"
-      ],
-      "js": [
-        "contentscript.js"
-      ],
+      "matches": ["file://*/*", "http://*/*", "https://*/*"],
+      "js": ["lockdown.cjs", "runLockdown.js", "contentscript.js"],
       "run_at": "document_start",
       "all_frames": true
     },

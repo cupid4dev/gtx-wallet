@@ -3,7 +3,6 @@
  */
 // these need to run before anything else
 /* eslint-disable import/first,import/order */
-import './lib/freezeGlobals'
 import setupFetchDebugging from './lib/setupFetchDebugging'
 /* eslint-enable import/order */
 
@@ -29,7 +28,6 @@ import createStreamSink from './lib/createStreamSink'
 import NotificationManager from './lib/notification-manager'
 import MetamaskController from './metamask-controller'
 import rawFirstTimeState from './first-time-state'
-import setupSentry from './lib/setupSentry'
 import getFirstPreferredLangCode from './lib/get-first-preferred-lang-code'
 import getObjStructure from './lib/getObjStructure'
 import setupEnsIpfsResolver from './lib/ens-ipfs/setup'
@@ -41,18 +39,15 @@ import {
 } from './lib/enums'
 /* eslint-enable import/first */
 
-// METAMASK_TEST_CONFIG is used in e2e tests to set the default network to localhost
-const firstTimeState = { ...rawFirstTimeState, ...global.METAMASK_TEST_CONFIG }
+const { sentry } = global
+const firstTimeState = { ...rawFirstTimeState }
 
 log.setDefaultLevel(process.env.METAMASK_DEBUG ? 'debug' : 'warn')
 
 const platform = new ExtensionPlatform()
+
 const notificationManager = new NotificationManager()
 global.METAMASK_NOTIFIER = notificationManager
-
-// setup sentry error reporting
-const release = platform.getVersion()
-const sentry = setupSentry({ release })
 
 let popupIsOpen = false
 let notificationIsOpen = false

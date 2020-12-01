@@ -100,7 +100,7 @@ export default class DetectTokensController {
   }
 
   /**
-   * For each token in eth-contract-metadata, find check selectedAddress balance.
+   * For each token in @metamask/contract-metadata, find check selectedAddress balance.
    */
   async detectNewTokens () {
     if (!this._network || !this._network.store) {
@@ -171,7 +171,7 @@ export default class DetectTokensController {
     const tokensToDetect = []
     this.web3.setProvider(this._network._provider)
     for (const contractAddress in contractsToUse) {
-      if (!Object.hasOwn(contractsToUse, contractAddress)) {
+      if (!Object.hasOwnProperty(contractsToUse, contractAddress)) { // eslint-disable-line no-prototype-builtins
         continue
       }
       const t = contractsToUse[contractAddress]

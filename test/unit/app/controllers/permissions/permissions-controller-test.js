@@ -1213,15 +1213,7 @@ describe('permissions controller', function () {
         'should not throw',
       )
 
-      assert.equal(
-        typeof middleware, 'function',
-        'should return function',
-      )
-
-      assert.equal(
-        middleware.name, 'engineAsMiddleware',
-        'function name should be "engineAsMiddleware"',
-      )
+      assert.equal(typeof middleware, 'function', 'should return function')
     })
 
     it('should create a middleware with extensionId', function () {
@@ -1242,11 +1234,6 @@ describe('permissions controller', function () {
       assert.equal(
         typeof middleware, 'function',
         'should return function',
-      )
-
-      assert.equal(
-        middleware.name, 'engineAsMiddleware',
-        'function name should be "engineAsMiddleware"',
       )
 
       const metadataStore = permController.store.getState()[METADATA_STORE_KEY]

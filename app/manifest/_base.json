@@ -29,7 +29,7 @@
     "scripts": [
       "globalthis.js",
       "initSentry.js",
-      "lockdown.cjs",
+      "lockdown.js",
       "runLockdown.js",
       "bg-libs.js",
       "background.js"
@@ -54,7 +54,7 @@
       "matches": ["file://*/*", "http://*/*", "https://*/*"],
       "js": [
         "globalthis.js",
-        "lockdown.cjs",
+        "lockdown.js",
         "runLockdown.js",
         "contentscript.js"
       ],

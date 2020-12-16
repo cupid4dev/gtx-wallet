@@ -1,5 +1,5 @@
 import Web3 from 'web3'
-import ObservableStore from 'obs-store'
+import { ObservableStore } from '@metamask/obs-store'
 import { normalize as normalizeAddress } from 'eth-sig-util'
 import { isValidAddress, toChecksumAddress } from 'ethereumjs-util'
 import abiERC721 from 'human-standard-collectible-abi'

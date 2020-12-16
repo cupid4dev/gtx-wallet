@@ -1,6 +1,6 @@
 import EventEmitter from 'events'
 import assert from 'assert'
-import ObservableStore from 'obs-store'
+import { ObservableStore } from '@metamask/obs-store'
 import { ethErrors } from 'eth-json-rpc-errors'
 import * as sigUtil from 'eth-sig-util'
 import { isValidAddress } from 'ethereumjs-util'

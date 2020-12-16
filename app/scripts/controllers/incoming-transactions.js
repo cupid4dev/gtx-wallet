@@ -1,4 +1,4 @@
-import ObservableStore from 'obs-store'
+import { ObservableStore } from '@metamask/obs-store'
 import log from 'loglevel'
 import BN from 'bn.js'
 import { TRANSACTION_TYPE } from '../../../shared/constants/transaction'

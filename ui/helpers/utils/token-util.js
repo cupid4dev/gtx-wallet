@@ -123,9 +123,9 @@ export function tokenInfoGetter () {
 }
 
 export function normalizeTokenLogoUrl (rawUrl) {
-  return rawUrl.indexOf('https://') !== -1 || rawUrl.indexOf('ipfs://') !== -1
-    ? rawUrl
-    : (`/images/contract/${rawUrl}`)
+  return rawUrl.indexOf('/') === -1 // if has a path or protocol, keep url as is
+    ? (`/images/contract/${rawUrl}`)
+    : rawUrl
 }
 
 export function calcTokenAmount (value, decimals) {

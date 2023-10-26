@@ -1,4 +1,5 @@
 import { connect } from 'react-redux'
+import { getIpfsGateway } from '../../../selectors'
 import Identicon from './identicon.component'
 
 const mapStateToProps = (state) => {
@@ -7,6 +8,7 @@ const mapStateToProps = (state) => {
   return {
     useBlockie,
     network,
+    ipfsGateway: getIpfsGateway(state),
   }
 }
 

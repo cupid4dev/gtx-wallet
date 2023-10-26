@@ -5,6 +5,8 @@ import contractMap from '../../../../gtx/mergedTokens'
 import { THETAMAINNET_NETWORK_ID } from '../../../../app/scripts/controllers/network/enums'
 import { checksumAddress } from '../../../helpers/utils/util'
 import Jazzicon from '../jazzicon'
+import { ipfsUrlReplace } from '../../../helpers/utils/ipfs.utils'
+import { normalizeTokenLogoUrl } from '../../../helpers/utils/token-util'
 import BlockieIdenticon from './blockieIdenticon'
 
 const getStyles = (diameter) => (
@@ -24,6 +26,7 @@ export default class Identicon extends PureComponent {
     image: PropTypes.string,
     useBlockie: PropTypes.bool,
     network: PropTypes.string,
+    ipfsGateway: PropTypes.string,
   }
 
   static defaultProps = {
@@ -37,12 +40,12 @@ export default class Identicon extends PureComponent {
   }
 
   renderImage () {
-    const { className, diameter, image } = this.props
+    const { className, diameter, image, ipfsGateway } = this.props
 
     return (
       <img
         className={classnames('identicon', className)}
-        src={image}
+        src={(image && ipfsUrlReplace(normalizeTokenLogoUrl(image), ipfsGateway)) || undefined}
         style={getStyles(diameter)}
       />
     )

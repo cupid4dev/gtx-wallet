@@ -1,10 +1,12 @@
 import { connect } from 'react-redux'
+import { getIpfsGateway } from '../../../selectors'
 import TokenList from './token-list.component'
 
-const mapStateToProps = ({ metamask }) => {
-  const { tokens } = metamask
+const mapStateToProps = (state) => {
+  const { tokens } = state.metamask
   return {
     tokens,
+    ipfsGateway: getIpfsGateway(state),
   }
 }
 

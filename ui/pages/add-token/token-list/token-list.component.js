@@ -3,6 +3,7 @@ import PropTypes from 'prop-types'
 import classnames from 'classnames'
 import { checkExistingAddresses } from '../../../helpers/utils/util'
 import { normalizeTokenLogoUrl } from '../../../helpers/utils/token-util'
+import { ipfsUrlReplace } from '../../../helpers/utils/ipfs.utils'
 import TokenListPlaceholder from './token-list-placeholder'
 
 export default class InfoBox extends Component {
@@ -15,10 +16,11 @@ export default class InfoBox extends Component {
     results: PropTypes.array,
     selectedTokens: PropTypes.object,
     onToggleToken: PropTypes.func,
+    ipfsGateway: PropTypes.string,
   }
 
   render () {
-    const { results = [], selectedTokens = {}, onToggleToken, tokens = [] } = this.props
+    const { results = [], selectedTokens = {}, onToggleToken, tokens = [], ipfsGateway } = this.props
 
     return results.length === 0
       ? <TokenListPlaceholder />
@@ -46,7 +48,7 @@ export default class InfoBox extends Component {
                       <div
                         className="token-list__token-icon"
                         style={{
-                          backgroundImage: logo && normalizeTokenLogoUrl(logo),
+                          backgroundImage: logo && `url(${ipfsUrlReplace(normalizeTokenLogoUrl(logo), ipfsGateway)})`,
                         }}
                       >
                       </div>

@@ -13,13 +13,6 @@ const inpageContent = fs.readFileSync(path.join(__dirname, '..', '..', 'dist', '
 const inpageSuffix = `//# sourceURL=${extension.runtime.getURL('inpage.js')}\n`
 const inpageBundle = inpageContent + inpageSuffix
 
-// Eventually this streaming injection could be replaced with:
-// https://developer.mozilla.org/en-US/docs/Mozilla/Tech/XPCOM/Language_Bindings/Components.utils.exportFunction
-//
-// But for now that is only Firefox
-// If we create a FireFox-only code path using that API,
-// MetaMask will be much faster loading and performant on Firefox.
-
 if (shouldInjectProvider()) {
   injectScript(inpageBundle)
   start()
@@ -39,7 +32,7 @@ function injectScript (content) {
     container.insertBefore(scriptTag, container.children[0])
     container.removeChild(scriptTag)
   } catch (e) {
-    console.error('MetaMask provider injection failed.', e)
+    console.error('GTx Wallet provider injection failed.', e)
   }
 }
 
@@ -77,13 +70,13 @@ async function setupStreams () {
     pageMux,
     pageStream,
     pageMux,
-    (err) => logStreamDisconnectWarning('MetaMask Inpage Multiplex', err),
+    (err) => logStreamDisconnectWarning('GTx Wallet Inpage Multiplex', err),
   )
   pump(
     extensionMux,
     extensionStream,
     extensionMux,
-    (err) => logStreamDisconnectWarning('MetaMask Background Multiplex', err),
+    (err) => logStreamDisconnectWarning('GTx Wallet Background Multiplex', err),
   )
 
   // forward communication across inpage-background for these channels only
@@ -102,7 +95,7 @@ function forwardTrafficBetweenMuxers (channelName, muxA, muxB) {
     channelA,
     channelB,
     channelA,
-    (err) => logStreamDisconnectWarning(`MetaMask muxed traffic for channel "${channelName}" failed.`, err),
+    (err) => logStreamDisconnectWarning(`GTx Wallet muxed traffic for channel "${channelName}" failed.`, err),
   )
 }
 
@@ -113,7 +106,7 @@ function forwardTrafficBetweenMuxers (channelName, muxA, muxB) {
  * @param {Error} err - Stream connection error
  */
 function logStreamDisconnectWarning (remoteLabel, err) {
-  let warningMsg = `MetamaskContentscript - lost connection to ${remoteLabel}`
+  let warningMsg = `GTxWalletContentscript - lost connection to ${remoteLabel}`
   if (err) {
     warningMsg += `\n${err.stack}`
   }
@@ -213,7 +206,7 @@ function blockedDomainCheck () {
  * Redirects the current page to a phishing information page
  */
 function redirectToPhishingWarning () {
-  console.log('MetaMask - routing to Phishing Warning component')
+  console.log('GTx Wallet - routing to Phishing Warning component')
   const extensionURL = extension.runtime.getURL('phishing.html')
   window.location.href = `${extensionURL}#${querystring.stringify({
     hostname: window.location.hostname,

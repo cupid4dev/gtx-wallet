@@ -74,7 +74,8 @@ const getPlatform = (_) => {
  *
  * @param {Object} txParams - Contains data about a transaction
  * @param {string} txParams.gas The gas for a transaction
- * @param {string} txParams.gasPrice The price per gas for the transaction
+ * @param {string} [txParams.gasPrice] The price per gas for a non-EIP-1559 transaction
+ * @param {string} [txParams.maxFeePerGas] The maximum price per gas for a EIP-1559 transaction
  * @param {string} txParams.value The value of ETH to send
  * @param {string} hexBalance - A balance of ETH represented as a hex string
  * @returns {boolean} - Whether the balance is greater than or equal to the value plus the value of gas times gasPrice
@@ -88,9 +89,9 @@ function sufficientBalance (txParams, hexBalance) {
   const balance = hexToBn(hexBalance)
   const value = hexToBn(txParams.value)
   const gasLimit = hexToBn(txParams.gas)
-  const gasPrice = hexToBn(txParams.gasPrice)
+  const effectiveGasPrice = hexToBn(txParams.maxFeePerGas ?? txParams.gasPrice)
 
-  const maxCost = value.add(gasLimit.mul(gasPrice))
+  const maxCost = value.add(gasLimit.mul(effectiveGasPrice))
   return balance.gte(maxCost)
 }
 

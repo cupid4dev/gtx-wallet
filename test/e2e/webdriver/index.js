@@ -41,12 +41,8 @@ async function setupFetchMocking (driver) {
     window.origFetch = window.fetch.bind(window)
     window.fetch = async (...args) => {
       const url = args[0]
-      if (url.match(/^http(s)?:\/\/ethgasstation\.info\/json\/ethgasAPI.*/u)) {
+      if (url.match(/^http(s)?:\/\/api\.metaswap\.codefi\.network\/gasPrices/u)) {
         return { json: async () => clone(mockResponses.ethGasBasic) }
-      } else if (url.match(/http(s?):\/\/ethgasstation\.info\/json\/predictTable.*/u)) {
-        return { json: async () => clone(mockResponses.ethGasPredictTable) }
-      } else if (url.match(/chromeextensionmm/u)) {
-        return { json: async () => clone(mockResponses.metametrics) }
       }
       return window.origFetch(...args)
     }

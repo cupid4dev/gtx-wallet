@@ -133,6 +133,7 @@ initialize().catch(log.error)
  * @property {number} conversionRate - A number representing the current exchange rate from the user's preferred currency to Ether.
  * @property {number} conversionDate - A unix epoch date (ms) for the time the current conversion rate was last retrieved.
  * @property {boolean} forgottenPassword - Returns true if the user has initiated the password recovery screen, is recovering from seed phrase.
+ * @property {Object} gasPricing - gas price related state per network: limit, basicGasEstimates, etc
  */
 
 /**

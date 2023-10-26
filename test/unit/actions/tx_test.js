@@ -1,8 +1,8 @@
 import assert from 'assert'
 import configureMockStore from 'redux-mock-store'
 import thunk from 'redux-thunk'
-import * as actions from '../../../ui/app/store/actions'
-import * as actionConstants from '../../../ui/app/store/actionConstants'
+import * as actions from '../../../ui/store/actions'
+import * as actionConstants from '../../../ui/store/actionConstants'
 
 const middlewares = [thunk]
 const mockStore = configureMockStore(middlewares)

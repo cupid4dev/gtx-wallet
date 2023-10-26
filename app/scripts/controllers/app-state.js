@@ -111,6 +111,16 @@ export default class AppStateController extends EventEmitter {
   }
 
   /**
+   *  Set which, if any, NFT has been selected by the user
+   * @param {object} nft the NFT selected by the user
+   */
+  setSelectedNFT (nft) {
+    this.store.updateState({
+      selectedNFT: nft,
+    })
+  }
+
+  /**
    * Sets the last active time to the current time
    * @returns {void}
    */

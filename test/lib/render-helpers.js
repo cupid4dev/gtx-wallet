@@ -4,7 +4,7 @@ import { render } from '@testing-library/react'
 import { mount } from 'enzyme'
 import { MemoryRouter } from 'react-router-dom'
 import PropTypes from 'prop-types'
-import { LegacyI18nProvider } from '../../ui/app/contexts/i18n'
+import { LegacyI18nProvider } from '../../ui/contexts/i18n'
 
 export function mountWithStore (component, store) {
   const context = {
@@ -30,13 +30,11 @@ export function mountWithRouter (component, store = {}, pathname = '/') {
     context: {
       router,
       t: (str) => str,
-      metricsEvent: () => undefined,
       store,
     },
     childContextTypes: {
       router: PropTypes.object,
       t: PropTypes.func,
-      metricsEvent: PropTypes.func,
       store: PropTypes.object,
     },
   })

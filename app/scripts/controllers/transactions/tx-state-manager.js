@@ -1,9 +1,11 @@
 import EventEmitter from 'safe-event-emitter'
 import ObservableStore from 'obs-store'
 import log from 'loglevel'
+import { pickBy } from 'lodash'
 import createId from '../../lib/random-id'
 import { generateHistoryEntry, replayHistory, snapshotFromTxMeta } from './lib/tx-state-history-helpers'
 import { getFinalStates, normalizeTxParams } from './lib/util'
+import { THETAMAINNET_CHAIN_ID, THETAMAINNET_NETWORK_ID } from '../network/enums'
 
 /**
   TransactionStateManager is responsible for the state of a transaction and
@@ -28,7 +30,7 @@ import { getFinalStates, normalizeTxParams } from './lib/util'
   @class
 */
 export default class TransactionStateManager extends EventEmitter {
-  constructor ({ initState, txHistoryLimit, getNetwork }) {
+  constructor ({ initState, txHistoryLimit, getNetwork, getCurrentChainId, getSelectedNative }) {
     super()
 
     this.store = new ObservableStore(
@@ -36,6 +38,8 @@ export default class TransactionStateManager extends EventEmitter {
     )
     this.txHistoryLimit = txHistoryLimit
     this.getNetwork = getNetwork
+    this.getCurrentChainId = getCurrentChainId
+    this.getSelectedNative = getSelectedNative
   }
 
   /**
@@ -52,8 +56,32 @@ export default class TransactionStateManager extends EventEmitter {
       time: (new Date()).getTime(),
       status: 'unapproved',
       metamaskNetworkId: netId,
-      loadingDefaults: true, ...opts,
+      loadingDefaults: true,
+      ...opts,
     }
+  }
+
+  /**
+   * Returns the entire tx list filtered to the current network and native mode if specified
+   * @param [matchNative] only return TXs matching the selectedNative current mode or not. default true.
+   * @returns entire tx list filtered to the current network
+   */
+  getNetworkTxList (matchNative = true, networkId = undefined, isThetaNative = undefined) {
+    const chainId = networkId ? null : this.getCurrentChainId()
+    const useNetworkId = networkId ?? this.getNetwork()
+    const selectedNative = isThetaNative ?? this.getSelectedNative()
+    return this.getFullTxList().filter((transaction) => {
+      const nativeMatch = Boolean(selectedNative) === Boolean(transaction.txParams?.isThetaNative)
+      let chainOrNetMatch, isThetaTx
+      if (transaction.chainId) {
+        chainOrNetMatch = transaction.chainId === chainId
+        isThetaTx = transaction.chainId === THETAMAINNET_CHAIN_ID
+      } else {
+        chainOrNetMatch = transaction.metamaskNetworkId === useNetworkId
+        isThetaTx = transaction.metamaskNetworkId === THETAMAINNET_NETWORK_ID
+      }
+      return chainOrNetMatch && (nativeMatch || !isThetaTx || !matchNative)
+    })
   }
 
   /**
@@ -64,18 +92,12 @@ export default class TransactionStateManager extends EventEmitter {
    * @param {number} [limit] a limit for the number of transactions to return
    * @returns {Object[]} The {@code txMeta}s, filtered to the current network
    */
-  getTxList (limit) {
-    const network = this.getNetwork()
-    const fullTxList = this.getFullTxList()
-
+  getTxList (limit, networkId = undefined, isThetaNative = undefined) {
+    const networkTxList = this.getNetworkTxList(true, networkId, isThetaNative)
     const nonces = new Set()
     const txs = []
-    for (let i = fullTxList.length - 1; i > -1; i--) {
-      const txMeta = fullTxList[i]
-      if (txMeta.metamaskNetworkId !== network) {
-        continue
-      }
-
+    for (let i = networkTxList.length - 1; i > -1; i--) {
+      const txMeta = networkTxList[i]
       if (limit !== undefined) {
         const { nonce } = txMeta.txParams
         if (!nonces.has(nonce)) {
@@ -86,7 +108,6 @@ export default class TransactionStateManager extends EventEmitter {
           }
         }
       }
-
       txs.unshift(txMeta)
     }
     return txs
@@ -208,8 +229,9 @@ export default class TransactionStateManager extends EventEmitter {
     @returns {Object} - the txMeta who matches the given id if none found
     for the network returns undefined
   */
-  getTx (txId) {
-    const txMeta = this.getTxsByMetaData('id', txId)[0]
+  getTx (txId, networkId = undefined, isThetaNative = undefined) {
+    const txList = this.getTxList(undefined, networkId, isThetaNative)
+    const txMeta = this.getTxsByMetaData('id', txId, txList)[0]
     return txMeta
   }
 
@@ -279,7 +301,22 @@ export default class TransactionStateManager extends EventEmitter {
       switch (key) {
         case 'chainId':
           if (typeof value !== 'number' && typeof value !== 'string') {
-            throw new Error(`${key} in txParams is not a Number or hex string. got: (${value})`)
+            throw new Error(`chainId in txParams is not a Number or hex string. got: (${value})`)
+          }
+          break
+        case 'isThetaNative':
+          if (value !== true && value !== undefined) {
+            throw new Error(`isThetaNative in txParams should be 'true' or 'undefined'. got: (${value})`)
+          }
+          break
+        case 'thetaTxType':
+          if (typeof value !== 'number' || value < 0 || value > 10 || isNaN(value)) {
+            throw new Error(`thetaTxType must be a number between 0 and 10, or undefined. got: (${value})`)
+          }
+          break
+        case 'additional':
+          if (typeof value !== 'object' && value !== undefined) {
+            throw new Error(`additional must be an object or undefined. got: (${value})`)
           }
           break
         default:
@@ -339,7 +376,7 @@ export default class TransactionStateManager extends EventEmitter {
     const filter = typeof value === 'function' ? value : (v) => v === value
 
     return txList.filter((txMeta) => {
-      if (key in txMeta.txParams) {
+      if (txMeta.txParams && key in txMeta.txParams) {
         return filter(txMeta.txParams[key])
       }
       return filter(txMeta[key])
@@ -347,7 +384,6 @@ export default class TransactionStateManager extends EventEmitter {
   }
 
   // get::set status
-
   /**
     @param {number} txId - the txMeta Id
     @returns {string} - the status of the tx.
@@ -438,17 +474,15 @@ export default class TransactionStateManager extends EventEmitter {
   }
 
   /**
-    Removes transaction from the given address for the current network
-    from the txList
+    Removes transaction from the given address for the current network from the txList
     @param {string} address - hex string of the from address on the txParams to remove
   */
   wipeTransactions (address) {
     // network only tx
-    const txs = this.getFullTxList()
-    const network = this.getNetwork()
+    const txs = this.getNetworkTxList(false)
 
     // Filter out the ones from the current account and network
-    const otherAccountTxs = txs.filter((txMeta) => !(txMeta.txParams.from === address && txMeta.metamaskNetworkId === network))
+    const otherAccountTxs = txs.filter((txMeta) => !(txMeta.txParams.from === address))
 
     // Update state
     this._saveTxList(otherAccountTxs)

@@ -13,7 +13,7 @@ const cleanContextForImports = () => {
   try {
     global.define = undefined
   } catch (_) {
-    console.warn('MetaMask - global.define could not be deleted.')
+    console.warn('GTx Wallet - global.define could not be deleted.')
   }
 }
 
@@ -24,7 +24,7 @@ const restoreContextAfterImports = () => {
   try {
     global.define = __define
   } catch (_) {
-    console.warn('MetaMask - global.define could not be overwritten.')
+    console.warn('GTx Wallet - global.define could not be overwritten.')
   }
 }
 
@@ -34,10 +34,6 @@ cleanContextForImports()
 import log from 'loglevel'
 import LocalMessageDuplexStream from 'post-message-stream'
 import { initProvider } from '@metamask/inpage-provider'
-
-// TODO:deprecate:2020
-import setupWeb3 from './lib/setupWeb3'
-/* eslint-enable import/first */
 
 restoreContextAfterImports()
 
@@ -53,20 +49,26 @@ const metamaskStream = new LocalMessageDuplexStream({
   target: 'contentscript',
 })
 
+// warn of conflicting metamask-compatible wallet
+const alertInterval = 5 * 60 * 1000
+if (window.ethereum && Date.now() - (window.gtx_lastConflictAlert || 0) > alertInterval) {
+  // TODO: put PopOver or other non-interruptive message
+  window.gtx_lastConflictAlert = Date.now()
+  throw new Error('Conflicting wallets detected by GTx Wallet. Please remove one and try again.')
+}
+
+// init GTx Wallet provider, save as both window.ethereum and window.gtx, and turn off auto page reload on network change since that was deprecated in 2020
 initProvider({
   connectionStream: metamaskStream,
 })
+window.gtx = window.ethereum
+window.gtx.autoRefreshOnNetworkChange = false
 
-// TODO:deprecate:2020
-// Setup web3
-
-if (typeof window.web3 !== 'undefined') {
-  throw new Error(`MetaMask detected another web3.
-     MetaMask will not work reliably with another web3 extension.
-     This usually happens if you have two MetaMasks installed,
-     or MetaMask and another web3 extension. Please remove one
-     and try again.`)
-}
-
-// proxy web3, assign to window, and set up site auto reload
-setupWeb3(log)
+// check for conflicting wallets loaded after GTx Wallet
+setTimeout(() => {
+  if (window.ethereum !== window.gtx && Date.now() - (window.gtx_lastConflictAlert || 0) > alertInterval) {
+    // TODO: put PopOver or other non-interruptive message
+    window.gtx_lastConflictAlert = Date.now()
+    console.warn('Conflicting wallets detected by GTx Wallet. Please remove one and try again.')
+  }
+}, 1000)

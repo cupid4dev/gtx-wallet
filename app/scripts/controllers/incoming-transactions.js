@@ -1,10 +1,10 @@
 import ObservableStore from 'obs-store'
 import log from 'loglevel'
 import BN from 'bn.js'
+import { TRANSACTION_TYPE } from '../../../shared/constants/transaction'
 import createId from '../lib/random-id'
 import { bnToHex } from '../lib/util'
 import fetchWithTimeout from '../lib/fetch-with-timeout'
-
 import {
   ROPSTEN,
   RINKEBY,
@@ -237,6 +237,11 @@ export default class IncomingTransactionsController {
   _normalizeTxFromEtherscan (txMeta, currentNetworkID) {
     const time = parseInt(txMeta.timeStamp, 10) * 1000
     const status = txMeta.isError === '0' ? 'confirmed' : 'failed'
+    const gasPriceParams = {
+      ...(txMeta.gasPrice && { gasPrice: bnToHex(new BN(txMeta.gasPrice)) }),
+      ...(txMeta.maxFeePerGas && { maxFeePerGas: bnToHex(new BN(txMeta.maxFeePerGas)) }),
+      ...(txMeta.maxPriorityFeePerGas && { maxPriorityFeePerGas: bnToHex(new BN(txMeta.maxPriorityFeePerGas)) }),
+    }
     return {
       blockNumber: txMeta.blockNumber,
       id: createId(),
@@ -246,13 +251,13 @@ export default class IncomingTransactionsController {
       txParams: {
         from: txMeta.from,
         gas: bnToHex(new BN(txMeta.gas)),
-        gasPrice: bnToHex(new BN(txMeta.gasPrice)),
+        ...gasPriceParams,
         nonce: bnToHex(new BN(txMeta.nonce)),
         to: txMeta.to,
         value: bnToHex(new BN(txMeta.value)),
       },
       hash: txMeta.hash,
-      transactionCategory: 'incoming',
+      type: TRANSACTION_TYPE.INCOMING,
     }
   }
 }

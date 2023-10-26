@@ -1,11 +1,14 @@
 import log from 'loglevel'
-import { valuesFor } from '../app/helpers/utils/util'
+import { valuesFor } from '../helpers/utils/util'
+import { THETAMAINNET_CHAIN_ID, THETAMAINNET_NETWORK_ID } from '../../app/scripts/controllers/network/enums'
 
-export default function txHelper (unapprovedTxs, unapprovedMsgs, personalMsgs, decryptMsgs, encryptionPublicKeyMsgs, typedMessages, network) {
+export default function txHelper (unapprovedTxs, unapprovedMsgs, personalMsgs, decryptMsgs, encryptionPublicKeyMsgs, typedMessages, network, chainId, selectedNative) {
   log.debug('tx-helper called with params:')
   log.debug({ unapprovedTxs, unapprovedMsgs, personalMsgs, decryptMsgs, encryptionPublicKeyMsgs, typedMessages, network })
 
-  const txValues = network ? valuesFor(unapprovedTxs).filter((txMeta) => txMeta.metamaskNetworkId === network) : valuesFor(unapprovedTxs)
+  const txValues = network
+    ? valuesFor(unapprovedTxs).filter((txMeta) => transactionMatchesNetwork(txMeta, chainId, network, selectedNative))
+    : valuesFor(unapprovedTxs)
   log.debug(`tx helper found ${txValues.length} unapproved txs`)
 
   const msgValues = valuesFor(unapprovedMsgs)
@@ -33,4 +36,11 @@ export default function txHelper (unapprovedTxs, unapprovedMsgs, personalMsgs, d
   })
 
   return allValues
+}
+
+export function transactionMatchesNetwork (transaction, chainId, networkId, selectedNative) {
+  const isChainOrNetMatch = transaction.chainId === chainId || transaction.metamaskNetworkId === networkId
+  const isThetaNetwork = chainId === THETAMAINNET_CHAIN_ID || networkId === THETAMAINNET_NETWORK_ID
+  const nativeMatch = Boolean(selectedNative) === Boolean(transaction.txParams?.isThetaNative)
+  return isChainOrNetMatch && (nativeMatch || !isThetaNetwork)
 }

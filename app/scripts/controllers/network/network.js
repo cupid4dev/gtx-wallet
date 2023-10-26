@@ -7,23 +7,38 @@ import JsonRpcEngine from 'json-rpc-engine'
 import providerFromEngine from 'eth-json-rpc-middleware/providerFromEngine'
 import log from 'loglevel'
 import { createSwappableProxy, createEventEmitterProxy } from 'swappable-obj-proxy'
+import { addHexPrefix } from 'ethereumjs-util'
+import { defaultNetworksData } from '../../../../ui/pages/settings/networks-tab/networks-tab.constants' // TODO: move to shared constants file
 import createMetamaskMiddleware from './createMetamaskMiddleware'
 import createInfuraClient from './createInfuraClient'
 import createJsonRpcClient from './createJsonRpcClient'
 import createLocalhostClient from './createLocalhostClient'
-
 import {
-  RINKEBY,
-  MAINNET,
+  // RINKEBY,
+  // MAINNET,
   LOCALHOST,
   INFURA_PROVIDER_TYPES,
+  THETAMAINNET_NETWORK_ID,
+  MAINNET_NETWORK_ID,
+  ROPSTEN_NETWORK_ID,
+  RINKEBY_NETWORK_ID,
+  GOERLI_NETWORK_ID,
+  KOVAN_NETWORK_ID,
+  THETAMAINNET_CHAIN_ID,
+  THETAMAINNET_RPC_URL,
+  TFUEL_SYMBOL,
+  THETASC_DISPLAY_NAME,
+  THETAMAINNET_EXPLORER_URL,
+  THETAMAINNET_DISPLAY_NAME,
 } from './enums'
 
 const networks = { networkList: {} }
 
-const env = process.env.METAMASK_ENV
-const { METAMASK_DEBUG } = process.env
+// const env = process.env.METAMASK_ENV
+// const METAMASK_DEBUG = process.env.METAMASK_DEBUG // eslint-disable-line prefer-destructuring
+const INFURA_PROJECT_ID = process.env.INFURA_PROJECT_ID // eslint-disable-line prefer-destructuring
 
+/*
 let defaultProviderConfigType
 if (process.env.IN_TEST === 'true') {
   defaultProviderConfigType = LOCALHOST
@@ -36,9 +51,22 @@ if (process.env.IN_TEST === 'true') {
 const defaultProviderConfig = {
   type: defaultProviderConfigType,
 }
+*/
 
+const theta = defaultNetworksData.find((e) => e.labelKey === 'theta_mainnet')
+export const defaultProviderConfig = {
+  type: theta.providerType,
+  rpcTarget: theta.rpcUrl,
+  chainId: theta.chainId,
+  ticker: theta.ticker,
+  nickname: THETAMAINNET_DISPLAY_NAME,
+  rpcPrefs: {
+    blockExplorerUrl: theta.blockExplorerUrl,
+    selectedNative: true,
+  },
+}
 const defaultNetworkConfig = {
-  ticker: 'ETH',
+  ticker: theta.ticker,
 }
 
 export default class NetworkController extends EventEmitter {
@@ -52,7 +80,8 @@ export default class NetworkController extends EventEmitter {
     this.providerStore = new ObservableStore(providerConfig)
     this.networkStore = new ObservableStore('loading')
     this.networkConfig = new ObservableStore(defaultNetworkConfig)
-    this.store = new ComposedStore({ provider: this.providerStore, network: this.networkStore, settings: this.networkConfig })
+    this.eip1559Compatible = new ObservableStore(false)
+    this.store = new ComposedStore({ provider: this.providerStore, network: this.networkStore, settings: this.networkConfig, eip1559Compatible: this.eip1559Compatible })
     this.on('networkDidChange', this.lookupNetwork)
     // provider and block tracker
     this._provider = null
@@ -81,6 +110,11 @@ export default class NetworkController extends EventEmitter {
     if (this.isNetworkLoading()) {
       this.lookupNetwork()
     }
+  }
+
+  getCurrentChainId () {
+    const networkId = parseInt(this.getNetworkState(), 10)
+    return networkId ? addHexPrefix(networkId.toString(16)) : undefined
   }
 
   getNetworkState () {
@@ -117,6 +151,7 @@ export default class NetworkController extends EventEmitter {
     const { type } = this.providerStore.getState()
     const ethQuery = new EthQuery(this._provider)
     const initialNetwork = this.getNetworkState()
+
     ethQuery.sendAsync({ method: 'net_version' }, (err, network) => {
       const currentNetwork = this.getNetworkState()
       if (initialNetwork === currentNetwork) {
@@ -125,9 +160,69 @@ export default class NetworkController extends EventEmitter {
           return
         }
         log.info(`web3.getNetwork returned ${network}`)
-        this.setNetworkState(network, type)
+
+        let eip1559Compatible
+        switch (network) {
+          case THETAMAINNET_NETWORK_ID:
+          case THETAMAINNET_CHAIN_ID:
+            eip1559Compatible = false
+            break
+          case MAINNET_NETWORK_ID:
+          case ROPSTEN_NETWORK_ID:
+          case RINKEBY_NETWORK_ID:
+          case GOERLI_NETWORK_ID:
+          case KOVAN_NETWORK_ID:
+            eip1559Compatible = true
+            break
+          default:
+            eip1559Compatible = null
+        }
+        if (eip1559Compatible === null) { // TODO: cache this info
+          ethQuery.sendAsync({
+            method: 'eth_getBlockByNumber',
+            params: ['latest', false], // no tx details
+          }, (err2, currentBlock) => {
+            if (err2) {
+              this.setNetworkState('loading')
+              return
+            }
+            eip1559Compatible = Boolean(currentBlock.baseFeePerGas)
+            log.info(`Network ${eip1559Compatible ? 'supports' : 'does not support'} EIP-1559`)
+            this.eip1559Compatible.putState(eip1559Compatible)
+            this.setNetworkState(network, type)
+          })
+        } else {
+          log.info(`Network ${eip1559Compatible ? 'supports' : 'does not support'} EIP-1559`)
+          this.eip1559Compatible.putState(eip1559Compatible)
+          this.setNetworkState(network, type)
+        }
       }
     })
+  }
+
+  setSelectedNative (native_) {
+    const { rpcPrefs } = this.providerStore.getState()
+    if (rpcPrefs.selectedNative !== native_) {
+      rpcPrefs.selectedNative = native_
+      this.providerStore.updateState({ rpcPrefs })
+    }
+  }
+
+  getSelectedNative () {
+    return this.providerStore.getState().rpcPrefs?.selectedNative
+  }
+
+  switchToScMode () {
+    this.setRpcTarget(
+      THETAMAINNET_RPC_URL,
+      THETAMAINNET_NETWORK_ID,
+      TFUEL_SYMBOL,
+      THETASC_DISPLAY_NAME,
+      {
+        blockExplorerUrl: THETAMAINNET_EXPLORER_URL,
+        selectedNative: false,
+      },
+    )
   }
 
   setRpcTarget (rpcTarget, chainId, ticker = 'ETH', nickname = '', rpcPrefs) {
@@ -154,6 +249,9 @@ export default class NetworkController extends EventEmitter {
   }
 
   set providerConfig (providerConfig) {
+    if (providerConfig && !providerConfig.rpcPrefs) {
+      providerConfig.rpcPrefs = {}
+    }
     this.providerStore.updateState(providerConfig)
     this._switchNetwork(providerConfig)
   }
@@ -177,7 +275,7 @@ export default class NetworkController extends EventEmitter {
     // infura type-based endpoints
     const isInfura = INFURA_PROVIDER_TYPES.includes(type)
     if (isInfura) {
-      this._configureInfuraProvider(opts)
+      this._configureInfuraProvider({ type, projectId: INFURA_PROJECT_ID })
     // other type-based rpc endpoints
     } else if (type === LOCALHOST) {
       this._configureLocalhostProvider()
@@ -189,10 +287,11 @@ export default class NetworkController extends EventEmitter {
     }
   }
 
-  _configureInfuraProvider ({ type }) {
+  _configureInfuraProvider ({ type, projectId }) {
     log.info('NetworkController - configureInfuraProvider', type)
     const networkClient = createInfuraClient({
       network: type,
+      projectId,
     })
     this._setNetworkClient(networkClient)
     // setup networkConfig

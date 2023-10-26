@@ -4,7 +4,7 @@ import configureMockStore from 'redux-mock-store'
 import thunk from 'redux-thunk'
 import sinon from 'sinon'
 import { mountWithStore } from '../../../lib/render-helpers'
-import { Dropdown } from '../../../../ui/app/components/app/dropdowns/components/dropdown'
+import { Dropdown } from '../../../../ui/components/app/dropdowns/components/dropdown'
 
 const mockState = {
   metamask: {

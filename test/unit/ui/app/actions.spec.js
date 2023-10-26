@@ -8,7 +8,7 @@ import Eth from 'ethjs'
 import KeyringController from 'eth-keyring-controller'
 import { createTestProviderTools } from '../../../stub/provider'
 import enLocale from '../../../../app/_locales/en/messages.json'
-import * as actions from '../../../../ui/app/store/actions'
+import * as actions from '../../../../ui/store/actions'
 import MetaMaskController from '../../../../app/scripts/metamask-controller'
 import firstTimeState from '../../localhostState'
 

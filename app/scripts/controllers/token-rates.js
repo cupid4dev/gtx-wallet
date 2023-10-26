@@ -27,23 +27,32 @@ export default class TokenRatesController {
    * Updates exchange rates for all tokens
    */
   async updateExchangeRates () {
+    const minRefreshInterval = 15 * 1000
+    const { lastUpdatedExchangeRates, contractExchangeRates: lastContractExchangeRates } = this.store.getState()
+    if (!this._tokens?.length || Date.now - (lastUpdatedExchangeRates || 0) < minRefreshInterval) {
+      if (lastContractExchangeRates === undefined) {
+        this.store.putState({ contractExchangeRates: {} })
+      }
+      return
+    }
     const contractExchangeRates = {}
     const nativeCurrency = this.currency ? this.currency.state.nativeCurrency.toLowerCase() : 'eth'
     const pairs = this._tokens.map((token) => token.address).join(',')
     const query = `contract_addresses=${pairs}&vs_currencies=${nativeCurrency}`
-    if (this._tokens.length > 0) {
-      try {
-        const response = await window.fetch(`https://api.coingecko.com/api/v3/simple/token_price/ethereum?${query}`)
-        const prices = await response.json()
-        this._tokens.forEach((token) => {
-          const price = prices[token.address.toLowerCase()] || prices[ethUtil.toChecksumAddress(token.address)]
-          contractExchangeRates[normalizeAddress(token.address)] = price ? price[nativeCurrency] : 0
-        })
-      } catch (error) {
-        log.warn(`MetaMask - TokenRatesController exchange rate fetch failed.`, error)
+    try {
+      const response = await window.fetch(`https://api.coingecko.com/api/v3/simple/token_price/ethereum?${query}`)
+      const prices = await response.json()
+      this._tokens.forEach((token) => {
+        const price = prices[token.address.toLowerCase()] || prices[ethUtil.toChecksumAddress(token.address)]
+        contractExchangeRates[normalizeAddress(token.address)] = price ? price[nativeCurrency] : 0
+      })
+      this.store.putState({ contractExchangeRates, lastUpdatedExchangeRates: Date.now() })
+    } catch (error) {
+      log.warn(`MetaMask - TokenRatesController exchange rate fetch failed.`, error)
+      if (lastContractExchangeRates === undefined) {
+        this.store.putState({ contractExchangeRates: {} })
       }
     }
-    this.store.putState({ contractExchangeRates })
   }
 
   /**

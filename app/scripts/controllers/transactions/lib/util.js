@@ -8,6 +8,17 @@ const normalizers = {
   data: (data) => addHexPrefix(data),
   gas: (gas) => addHexPrefix(gas),
   gasPrice: (gasPrice) => addHexPrefix(gasPrice),
+  maxFeePerGas: (maxFeePerGas) => addHexPrefix(maxFeePerGas),
+  maxPriorityFeePerGas: (maxPriorityFeePerGas) => addHexPrefix(maxPriorityFeePerGas),
+  value2: addHexPrefix,
+  isThetaNative: (val) => (val === true ? true : undefined),
+  thetaTxType: (val) => {
+    const nVal = parseInt(val, 10)
+    return (isNaN(nVal) ? undefined : nVal)
+  },
+  additional: (val) => {
+    return typeof val === 'object' ? val : undefined
+  },
 }
 
 /**
@@ -33,7 +44,7 @@ export function normalizeTxParams (txParams, lowerCase = true) {
  * @param {Object} txParams - the tx params
  * @throws {Error} if the tx params contains invalid fields
  */
-export function validateTxParams (txParams) {
+export function validateTxParams (txParams) { // TODO: expand validations
   validateFrom(txParams)
   validateRecipient(txParams)
   if ('value' in txParams) {

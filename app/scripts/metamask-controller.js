@@ -25,16 +25,15 @@ import TrezorKeyring from 'eth-trezor-keyring'
 import LedgerBridgeKeyring from '@metamask/eth-ledger-bridge-keyring'
 import EthQuery from 'eth-query'
 import nanoid from 'nanoid'
-import contractMap from 'eth-contract-metadata'
 import {
   AddressBookController,
   CurrencyRateController,
   PhishingController,
 } from '@metamask/controllers'
+import contractMap from '../../gtx/mergedTokens'
 import ComposableObservableStore from './lib/ComposableObservableStore'
 import AccountTracker from './lib/account-tracker'
 import createLoggerMiddleware from './lib/createLoggerMiddleware'
-import createMethodMiddleware from './lib/createMethodMiddleware'
 import createOriginMiddleware from './lib/createOriginMiddleware'
 import createTabIdMiddleware from './lib/createTabIdMiddleware'
 import createOnboardingMiddleware from './lib/createOnboardingMiddleware'
@@ -46,7 +45,6 @@ import AppStateController from './controllers/app-state'
 import CachedBalancesController from './controllers/cached-balances'
 import AlertController from './controllers/alert'
 import OnboardingController from './controllers/onboarding'
-import ThreeBoxController from './controllers/threebox'
 import IncomingTransactionsController from './controllers/incoming-transactions'
 import MessageManager from './lib/message-manager'
 import DecryptMessageManager from './lib/decrypt-message-manager'
@@ -62,8 +60,10 @@ import nodeify from './lib/nodeify'
 import accountImporter from './account-import-strategies'
 import selectChainId from './lib/select-chain-id'
 import seedPhraseVerifier from './lib/seed-phrase-verifier'
-
-import backgroundMetaMetricsEvent from './lib/background-metametrics'
+import { THETAMAINNET_NETWORK_ID, THETAMAINNET_CHAIN_ID, THETA_GAS_PER_TRANSFER_HEXWEI } from './controllers/network/enums'
+import GasPricingTracker from './controllers/gas'
+import BackupController from './controllers/backup'
+import { defaultProviderConfig } from './controllers/network/network'
 
 export default class MetamaskController extends EventEmitter {
 
@@ -129,6 +129,25 @@ export default class MetamaskController extends EventEmitter {
     this.provider = this.networkController.getProviderAndBlockTracker().provider
     this.blockTracker = this.networkController.getProviderAndBlockTracker().blockTracker
 
+    this.preferencesController.network = this.networkController // init web3 of preferences
+
+    // ensure ticker is correct when starts on Theta Mainnet
+    this.setCurrentCurrency(
+      this.currencyRateController.state.currentCurrency,
+      (error) => {
+        if (error) {
+          throw error
+        }
+      },
+    )
+
+    this.gasPricingTracker = new GasPricingTracker({
+      initState: initState.gasPricingTracker,
+      networkController: this.networkController,
+      provider: this.provider,
+      blockTracker: this.blockTracker,
+    })
+
     // token exchange rate tracker
     this.tokenRatesController = new TokenRatesController({
       currency: this.currencyRateController,
@@ -152,6 +171,7 @@ export default class MetamaskController extends EventEmitter {
       provider: this.provider,
       blockTracker: this.blockTracker,
       network: this.networkController,
+      getCurrentChainId: this.networkController.getCurrentChainId.bind(this.networkController),
     })
 
     // start and stop polling for balances based on activeControllerConnections
@@ -160,10 +180,12 @@ export default class MetamaskController extends EventEmitter {
         this.accountTracker.start()
         this.incomingTransactionsController.start()
         this.tokenRatesController.start()
+        this.gasPricingTracker.start()
       } else {
         this.accountTracker.stop()
         this.incomingTransactionsController.stop()
         this.tokenRatesController.stop()
+        this.gasPricingTracker.stop()
       }
     })
 
@@ -216,26 +238,20 @@ export default class MetamaskController extends EventEmitter {
       preferencesStore: this.preferencesController.store,
     })
 
-    const version = this.platform.getVersion()
-    this.threeBoxController = new ThreeBoxController({
-      preferencesController: this.preferencesController,
-      addressBookController: this.addressBookController,
-      keyringController: this.keyringController,
-      initState: initState.ThreeBoxController,
-      getKeyringControllerState: this.keyringController.memStore.getState.bind(this.keyringController.memStore),
-      version,
-    })
-
     this.txController = new TransactionController({
       initState: initState.TransactionController || initState.TransactionManager,
       getPermittedAccounts: this.permissionsController.getAccounts.bind(this.permissionsController),
       networkStore: this.networkController.networkStore,
+      getCurrentChainId: this.networkController.getCurrentChainId.bind(this.networkController),
+      getSelectedNative: this.networkController.getSelectedNative.bind(this.networkController),
+      switchToScMode: this.networkController.switchToScMode.bind(this.networkController),
       preferencesStore: this.preferencesController.store,
       txHistoryLimit: 40,
       getNetwork: this.networkController.getNetworkState.bind(this),
       signTransaction: this.keyringController.signTransaction.bind(this.keyringController),
       provider: this.provider,
       blockTracker: this.blockTracker,
+      gasPricingTracker: this.gasPricingTracker,
     })
     this.txController.on('newUnapprovedTx', () => opts.showUnapprovedTx())
 
@@ -243,15 +259,6 @@ export default class MetamaskController extends EventEmitter {
       if (status === 'confirmed' || status === 'failed') {
         const txMeta = this.txController.txStateManager.getTx(txId)
         this.platform.showTransactionNotification(txMeta)
-
-        const { txReceipt } = txMeta
-        if (txReceipt && txReceipt.status === '0x0') {
-          this.sendBackgroundMetaMetrics({
-            action: 'Transactions',
-            name: 'On Chain Failure',
-            customVariables: { errorMessage: txMeta.simulationFails?.reason },
-          })
-        }
       }
     })
 
@@ -287,7 +294,7 @@ export default class MetamaskController extends EventEmitter {
       IncomingTransactionsController: this.incomingTransactionsController.store,
       PermissionsController: this.permissionsController.permissions,
       PermissionsMetadata: this.permissionsController.store,
-      ThreeBoxController: this.threeBoxController.store,
+      GasPricingTracker: this.gasPricingTracker.store,
     })
 
     this.memStore = new ComposableObservableStore(null, {
@@ -311,11 +318,15 @@ export default class MetamaskController extends EventEmitter {
       IncomingTransactionsController: this.incomingTransactionsController.store,
       PermissionsController: this.permissionsController.permissions,
       PermissionsMetadata: this.permissionsController.store,
-      ThreeBoxController: this.threeBoxController.store,
-      // ENS Controller
+      GasPricingTracker: this.gasPricingTracker.store,
       EnsController: this.ensController.store,
     })
     this.memStore.subscribe(this.sendUpdate.bind(this))
+
+    this.backupController = new BackupController({
+      addressBookController: this.addressBookController,
+      preferencesController: this.preferencesController,
+    })
 
     const password = process.env.CONF?.password
     if (
@@ -323,6 +334,11 @@ export default class MetamaskController extends EventEmitter {
       this.onboardingController.completedOnboarding
     ) {
       this.submitPassword(password)
+    }
+
+    if (!initState.NetworkController && defaultProviderConfig.type === 'rpc') {
+      const { rpcTarget, chainId, ticker, nickname, rpcPrefs } = defaultProviderConfig
+      this.setCustomRpc(rpcTarget, chainId, ticker, nickname, rpcPrefs)
     }
   }
 
@@ -428,8 +444,8 @@ export default class MetamaskController extends EventEmitter {
       alertController,
       permissionsController,
       preferencesController,
-      threeBoxController,
       txController,
+      backupController,
     } = this
 
     return {
@@ -440,8 +456,6 @@ export default class MetamaskController extends EventEmitter {
       setUseNonceField: this.setUseNonceField.bind(this),
       setUsePhishDetect: this.setUsePhishDetect.bind(this),
       setIpfsGateway: this.setIpfsGateway.bind(this),
-      setParticipateInMetaMetrics: this.setParticipateInMetaMetrics.bind(this),
-      setMetaMetricsSendCount: this.setMetaMetricsSendCount.bind(this),
       setFirstTimeFlowType: this.setFirstTimeFlowType.bind(this),
       setCurrentLocale: this.setCurrentLocale.bind(this),
       markPasswordForgotten: this.markPasswordForgotten.bind(this),
@@ -478,6 +492,8 @@ export default class MetamaskController extends EventEmitter {
 
       // PreferencesController
       setSelectedAddress: nodeify(preferencesController.setSelectedAddress, preferencesController),
+      setSelectedNFT: nodeify(preferencesController.setSelectedNFT, preferencesController),
+      setSelectedNative: nodeify(networkController.setSelectedNative, networkController),
       addToken: nodeify(preferencesController.addToken, preferencesController),
       removeToken: nodeify(preferencesController.removeToken, preferencesController),
       removeSuggestedTokens: nodeify(preferencesController.removeSuggestedTokens, preferencesController),
@@ -545,14 +561,6 @@ export default class MetamaskController extends EventEmitter {
       setAlertEnabledness: nodeify(alertController.setAlertEnabledness, alertController),
       setUnconnectedAccountAlertShown: nodeify(this.alertController.setUnconnectedAccountAlertShown, this.alertController),
 
-      // 3Box
-      setThreeBoxSyncingPermission: nodeify(threeBoxController.setThreeBoxSyncingPermission, threeBoxController),
-      restoreFromThreeBox: nodeify(threeBoxController.restoreFromThreeBox, threeBoxController),
-      setShowRestorePromptToFalse: nodeify(threeBoxController.setShowRestorePromptToFalse, threeBoxController),
-      getThreeBoxLastUpdated: nodeify(threeBoxController.getLastUpdated, threeBoxController),
-      turnThreeBoxSyncingOn: nodeify(threeBoxController.turnThreeBoxSyncingOn, threeBoxController),
-      initializeThreeBox: nodeify(this.initializeThreeBox, this),
-
       // permissions
       approvePermissionsRequest: nodeify(permissionsController.approvePermissionsRequest, permissionsController),
       clearPermissions: permissionsController.clearPermissions.bind(permissionsController),
@@ -562,6 +570,10 @@ export default class MetamaskController extends EventEmitter {
       addPermittedAccount: nodeify(permissionsController.addPermittedAccount, permissionsController),
       removePermittedAccount: nodeify(permissionsController.removePermittedAccount, permissionsController),
       requestAccountsPermissionWithId: nodeify(permissionsController.requestAccountsPermissionWithId, permissionsController),
+
+      // backup and restore
+      backupData: nodeify(backupController.saveData, backupController),
+      restoreData: nodeify(backupController.loadData, backupController),
     }
   }
 
@@ -779,19 +791,6 @@ export default class MetamaskController extends EventEmitter {
     }
 
     await this.blockTracker.checkForLatestBlock()
-
-    try {
-      const threeBoxSyncingAllowed = this.threeBoxController.getThreeBoxSyncingState()
-      if (threeBoxSyncingAllowed && !this.threeBoxController.box) {
-        // 'await' intentionally omitted to avoid waiting for initialization
-        this.threeBoxController.init()
-        this.threeBoxController.turnThreeBoxSyncingOn()
-      } else if (threeBoxSyncingAllowed && this.threeBoxController.box) {
-        this.threeBoxController.turnThreeBoxSyncingOn()
-      }
-    } catch (error) {
-      log.error(error)
-    }
 
     return this.keyringController.fullUpdate()
   }
@@ -1389,28 +1388,31 @@ export default class MetamaskController extends EventEmitter {
    * Allows a user to attempt to cancel a previously submitted transaction by creating a new
    * transaction.
    * @param {number} originalTxId - the id of the txMeta that you want to attempt to cancel
-   * @param {string} [customGasPrice] - the hex value to use for the cancel transaction
+   * @param {string} [customGasPriceParams] - new gas parameters: gasPrice or (maxFeePerGas and maxPriorityFeePerGas) in hex wei
    * @returns {Object} - MetaMask state
    */
-  async createCancelTransaction (originalTxId, customGasPrice) {
-    await this.txController.createCancelTransaction(originalTxId, customGasPrice)
+  async createCancelTransaction (originalTxId, customGasPriceParams) {
+    await this.txController.createCancelTransaction(originalTxId, customGasPriceParams)
     const state = await this.getState()
     return state
   }
 
-  async createSpeedUpTransaction (originalTxId, customGasPrice, customGasLimit) {
-    await this.txController.createSpeedUpTransaction(originalTxId, customGasPrice, customGasLimit)
+  async createSpeedUpTransaction (originalTxId, customGasPriceParams) {
+    await this.txController.createSpeedUpTransaction(originalTxId, customGasPriceParams)
     const state = await this.getState()
     return state
   }
 
-  estimateGas (estimateGasParams) {
+  estimateGas (txParams) {
     return new Promise((resolve, reject) => {
-      return this.txController.txGasUtil.query.estimateGas(estimateGasParams, (err, res) => {
+      if (this.networkController.getSelectedNative() && !txParams.data) {
+        resolve(THETA_GAS_PER_TRANSFER_HEXWEI) // dummy value, not accurate in all cases but replaced with correct value after anyway
+        return undefined
+      }
+      return this.txController.txGasUtil.query.estimateGas(txParams, (err, res) => {
         if (err) {
           return reject(err)
         }
-
         return resolve(res)
       })
     })
@@ -1618,10 +1620,6 @@ export default class MetamaskController extends EventEmitter {
       location,
       registerOnboarding: this.onboardingController.registerOnboarding,
     }))
-    engine.push(createMethodMiddleware({
-      origin,
-      sendMetrics: this.sendBackgroundMetaMetrics.bind(this),
-    }))
     // filter and subscription polyfills
     engine.push(filterMiddleware)
     engine.push(subscriptionManager.middleware)
@@ -1822,28 +1820,6 @@ export default class MetamaskController extends EventEmitter {
     return nonceLock.nextNonce
   }
 
-  async sendBackgroundMetaMetrics ({ action, name, customVariables } = {}) {
-
-    if (!action || !name) {
-      throw new Error('Must provide action and name.')
-    }
-
-    const metamaskState = await this.getState()
-    const version = this.platform.getVersion()
-    backgroundMetaMetricsEvent(
-      metamaskState,
-      version,
-      {
-        customVariables,
-        eventOpts: {
-          action,
-          category: 'Background',
-          name,
-        },
-      },
-    )
-  }
-
   //=============================================================================
   // CONFIG
   //=============================================================================
@@ -1880,6 +1856,9 @@ export default class MetamaskController extends EventEmitter {
    * @param {string} chainId - The chainId of the selected network.
    * @param {string} ticker - The ticker symbol of the selected network.
    * @param {string} nickname - Optional nickname of the selected network.
+   * @param {Object} [rpcPrefs] - RPC preferences.
+   * @param {string} [rpcPrefs.blockExplorerUrl] - URL of block explorer for the chain.
+   * @param {bool} [rpcPrefs.selectedNative] - Should Native network connection be used instead of EVM
    * @returns {Promise<String>} - The RPC Target URL confirmed.
    */
 
@@ -1894,7 +1873,8 @@ export default class MetamaskController extends EventEmitter {
    * @param {string} rpcTarget - A URL for a valid Ethereum RPC API.
    * @param {string} chainId - The chainId of the selected network.
    * @param {string} ticker - The ticker symbol of the selected network.
-   * @param {string} nickname - Optional nickname of the selected network.
+   * @param {string} [nickname] - Optional nickname of the selected network.
+   * @param {Object} [rpcPrefs] - Optional RPC preferences.
    * @returns {Promise<String>} - The RPC Target URL confirmed.
    */
   async setCustomRpc (rpcTarget, chainId, ticker = 'ETH', nickname = '', rpcPrefs = {}) {
@@ -1904,8 +1884,22 @@ export default class MetamaskController extends EventEmitter {
     if (rpcSettings) {
       this.networkController.setRpcTarget(rpcSettings.rpcUrl, rpcSettings.chainId, rpcSettings.ticker, rpcSettings.nickname, rpcPrefs)
     } else {
-      this.networkController.setRpcTarget(rpcTarget, chainId, ticker, nickname, rpcPrefs)
-      await this.preferencesController.addToFrequentRpcList(rpcTarget, chainId, ticker, nickname, rpcPrefs)
+      this.networkController.setRpcTarget(
+        rpcTarget,
+        chainId,
+        ticker,
+        nickname,
+        rpcPrefs,
+      )
+      if (chainId !== THETAMAINNET_CHAIN_ID && chainId !== THETAMAINNET_NETWORK_ID) {
+        await this.preferencesController.addToFrequentRpcList(
+          rpcTarget,
+          chainId,
+          ticker,
+          nickname,
+          rpcPrefs,
+        )
+      }
     }
     return rpcTarget
   }
@@ -1916,10 +1910,6 @@ export default class MetamaskController extends EventEmitter {
    */
   async delCustomRpc (rpcTarget) {
     await this.preferencesController.removeFromFrequentRpcList(rpcTarget)
-  }
-
-  async initializeThreeBox () {
-    await this.threeBoxController.init()
   }
 
   /**
@@ -1981,35 +1971,6 @@ export default class MetamaskController extends EventEmitter {
   setIpfsGateway (val, cb) {
     try {
       this.preferencesController.setIpfsGateway(val)
-      cb(null)
-      return
-    } catch (err) {
-      cb(err)
-      // eslint-disable-next-line no-useless-return
-      return
-    }
-  }
-
-  /**
-   * Sets whether or not the user will have usage data tracked with MetaMetrics
-   * @param {boolean} bool - True for users that wish to opt-in, false for users that wish to remain out.
-   * @param {Function} cb - A callback function called when complete.
-   */
-  setParticipateInMetaMetrics (bool, cb) {
-    try {
-      const metaMetricsId = this.preferencesController.setParticipateInMetaMetrics(bool)
-      cb(null, metaMetricsId)
-      return
-    } catch (err) {
-      cb(err)
-      // eslint-disable-next-line no-useless-return
-      return
-    }
-  }
-
-  setMetaMetricsSendCount (val, cb) {
-    try {
-      this.preferencesController.setMetaMetricsSendCount(val)
       cb(null)
       return
     } catch (err) {

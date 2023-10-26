@@ -1,7 +1,7 @@
 import assert from 'assert'
 import freeze from 'deep-freeze-strict'
-import reducers from '../../../ui/app/ducks'
-import * as actionConstants from '../../../ui/app/store/actionConstants'
+import reducers from '../../../ui/ducks'
+import * as actionConstants from '../../../ui/store/actionConstants'
 
 describe('SHOW_ACCOUNT_DETAIL', function () {
   it('updates metamask state', function () {

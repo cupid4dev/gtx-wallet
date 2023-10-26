@@ -32,10 +32,12 @@ async function start () {
 
   // links to extension builds
   const platforms = ['chrome', 'firefox', 'opera']
-  const buildLinks = platforms.map((platform) => {
-    const url = `${BUILD_LINK_BASE}/builds/metamask-${platform}-${VERSION}.zip`
-    return `<a href="${url}">${platform}</a>`
-  }).join(', ')
+  const buildLinks = platforms
+    .map((platform) => {
+      const url = `${BUILD_LINK_BASE}/builds/gtxwallet-${platform}-${VERSION}.zip`
+      return `<a href="${url}">${platform}</a>`
+    })
+    .join(', ')
 
   // links to bundle browser builds
   const bundles = ['background', 'ui', 'inpage', 'contentscript', 'ui-libs', 'bg-libs', 'phishing-detect']

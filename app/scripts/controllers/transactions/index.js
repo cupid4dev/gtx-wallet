@@ -1,36 +1,39 @@
 import EventEmitter from 'safe-event-emitter'
 import ObservableStore from 'obs-store'
-import ethUtil from 'ethereumjs-util'
-import Transaction from 'ethereumjs-tx'
+import ethUtil, { addHexPrefix } from 'ethereumjs-util'
+import Bytes from 'eth-lib/lib/bytes'
+import Common from '@ethereumjs/common'
 import EthQuery from 'ethjs-query'
 import { ethErrors } from 'eth-json-rpc-errors'
-import abi from 'human-standard-token-abi'
+import erc20Abi from 'human-standard-token-abi'
+import erc721Abi from 'human-standard-collectible-abi'
 import abiDecoder from 'abi-decoder'
 import NonceTracker from 'nonce-tracker'
 import log from 'loglevel'
-import {
-  TOKEN_METHOD_APPROVE,
-  TOKEN_METHOD_TRANSFER,
-  TOKEN_METHOD_TRANSFER_FROM,
-  SEND_ETHER_ACTION_KEY,
-  DEPLOY_CONTRACT_ACTION_KEY,
-  CONTRACT_INTERACTION_KEY,
-} from '../../../../ui/app/helpers/constants/transactions'
+import { BN } from 'bn.js'
+import BigNumber from 'bignumber.js'
+import * as thetajs from '@thetalabs/theta-js'
+import request from 'request'
+import { baseFeeMultiplier } from '../gas/gasPricingTracker'
+import { decGWEIToHexWEI } from '../../../../ui/helpers/utils/conversions.util'
 import cleanErrorStack from '../../lib/cleanErrorStack'
 import { hexToBn, bnToHex, BnMultiplyByFraction } from '../../lib/util'
-import { TRANSACTION_NO_CONTRACT_ERROR_KEY } from '../../../../ui/app/helpers/constants/error-keys'
+import { TRANSACTION_NO_CONTRACT_ERROR_KEY } from '../../../../ui/helpers/constants/error-keys'
+import { THETAMAINNET_CHAIN_ID_STR, THETAMAINNET_NETWORK_ID, THETA_GASPRICE_HEXWEI, THETA_GAS_PER_TRANSFER_HEXWEI, THETAMAINNET_NATIVE_RPC_URL } from '../network/enums'
+import * as theta from '../../../../shared/constants/theta'
+import thetaTokens from '../../../../gtx/theta-tokens.json'
+import { getCode } from '../../../../ui/helpers/utils/transactions.util'
+import { TRANSACTION_STATUS, TRANSACTION_TYPE } from '../../../../shared/constants/transaction'
 import TransactionStateManager from './tx-state-manager'
 import TxGasUtil from './tx-gas-utils'
 import PendingTransactionTracker from './pending-tx-tracker'
 import * as txUtils from './lib/util'
-import {
-  TRANSACTION_TYPE_CANCEL,
-  TRANSACTION_TYPE_RETRY,
-  TRANSACTION_TYPE_STANDARD,
-  TRANSACTION_STATUS_APPROVED,
-} from './enums'
+import { Transaction, FeeMarketEIP1559Transaction } from './lib/ethereumjs-tx-mod'
 
-abiDecoder.addABI(abi)
+const ThetaTxType = thetajs.constants.TxType
+
+abiDecoder.addABI(erc20Abi)
+abiDecoder.addABI(erc721Abi)
 
 const SIMPLE_GAS_COST = '0x5208' // Hex for 21000, cost of a simple send.
 const MAX_MEMSTORE_TX_LIST_SIZE = 100 // Number of transactions (by unique nonces) to keep in memory
@@ -67,7 +70,11 @@ export default class TransactionController extends EventEmitter {
     super()
     this.networkStore = opts.networkStore || new ObservableStore({})
     this.preferencesStore = opts.preferencesStore || new ObservableStore({})
+    this.gasPricingTracker = opts.gasPricingTracker
     this.provider = opts.provider
+    this._getCurrentChainId = opts.getCurrentChainId
+    this._getSelectedNative = opts.getSelectedNative
+    this._switchToScMode = opts.switchToScMode
     this.getPermittedAccounts = opts.getPermittedAccounts
     this.blockTracker = opts.blockTracker
     this.signEthTx = opts.signTransaction
@@ -82,6 +89,8 @@ export default class TransactionController extends EventEmitter {
       initState: opts.initState,
       txHistoryLimit: opts.txHistoryLimit,
       getNetwork: this.getNetwork.bind(this),
+      getCurrentChainId: opts.getCurrentChainId,
+      getSelectedNative: opts.getSelectedNative,
     })
     this._onBootCleanUp()
 
@@ -128,9 +137,9 @@ export default class TransactionController extends EventEmitter {
    */
   getChainId () {
     const networkState = this.networkStore.getState()
-    // eslint-disable-next-line radix
-    const integerChainId = parseInt(networkState)
-    if (Number.isNaN(integerChainId)) {
+    const chainId = this._getCurrentChainId()
+    const integerChainId = parseInt(chainId, 16)
+    if (networkState === 'loading' || Number.isNaN(integerChainId)) {
       return 0
     }
     return integerChainId
@@ -200,11 +209,11 @@ export default class TransactionController extends EventEmitter {
     `generateTxMeta` adds the default txMeta properties to the passed object.
     These include the tx's `id`. As we use the id for determining order of
     txes in the tx-state-manager, it is necessary to call the asynchronous
-    method `this._determineTransactionCategory` after `generateTxMeta`.
+    method `this._determineTransactionType` after `generateTxMeta`.
     */
     let txMeta = this.txStateManager.generateTxMeta({
       txParams: normalizedTxParams,
-      type: TRANSACTION_TYPE_STANDARD,
+      type: TRANSACTION_TYPE.SENT_ETHER,
     })
 
     if (origin === 'metamask') {
@@ -226,12 +235,24 @@ export default class TransactionController extends EventEmitter {
       if (!permittedAddresses.includes(normalizedTxParams.from)) {
         throw ethErrors.provider.unauthorized({ data: { origin } })
       }
+
+      // if dApp initiated TX but wallet is set to Theta Native then switch to Theta SC mode
+      if (typeof origin === 'string' &&
+        txMeta.metamaskNetworkId === THETAMAINNET_NETWORK_ID &&
+        this._getSelectedNative()
+      ) {
+        if (txMeta.txParams.isThetaNative) {
+          delete txMeta.txParams.isThetaNative
+        }
+        console.log('changing to smart contract (SC) mode for dApp Tx processing')
+        this._switchToScMode()
+      }
     }
 
     txMeta.origin = origin
 
-    const { transactionCategory, getCodeResponse } = await this._determineTransactionCategory(txParams)
-    txMeta.transactionCategory = transactionCategory
+    const { type, getCodeResponse } = await this._determineTransactionType(txParams, txMeta.metamaskNetworkId)
+    txMeta.type = type
 
     // ensure value
     txMeta.txParams.value = txMeta.txParams.value
@@ -245,9 +266,11 @@ export default class TransactionController extends EventEmitter {
       txMeta = await this.addTxGasDefaults(txMeta, getCodeResponse)
     } catch (error) {
       log.warn(error)
-      txMeta = this.txStateManager.getTx(txMeta.id)
-      txMeta.loadingDefaults = false
-      this.txStateManager.updateTx(txMeta, 'Failed to calculate gas defaults.')
+      txMeta = this.txStateManager.getTx(txMeta.id, txMeta.metamaskNetworkId, txMeta.txParams?.isThetaNative)
+      if (txMeta) {
+        txMeta.loadingDefaults = false
+        this.txStateManager.updateTx(txMeta, 'Failed to calculate gas defaults.')
+      }
       throw error
     }
 
@@ -259,40 +282,121 @@ export default class TransactionController extends EventEmitter {
   }
 
   /**
-   * Adds the tx gas defaults: gas && gasPrice
+   * Adds the tx gas defaults: gas && gasPrice/maxFeePerGas&maxPriorityFeePerGas
    * @param {Object} txMeta - the txMeta object
    * @returns {Promise<object>} - resolves with txMeta
    */
   async addTxGasDefaults (txMeta, getCodeResponse) {
-    const defaultGasPrice = await this._getDefaultGasPrice(txMeta)
+    // gas limit
     const { gasLimit: defaultGasLimit, simulationFails } = await this._getDefaultGasLimit(txMeta, getCodeResponse)
-
-    // eslint-disable-next-line no-param-reassign
-    txMeta = this.txStateManager.getTx(txMeta.id)
+    if (defaultGasLimit && txMeta.txParams && !txMeta.txParams.gas) {
+      txMeta.txParams.gas = defaultGasLimit
+    }
+    const { id, metamaskNetworkId, txParams: { isThetaNative } = {} } = txMeta
+    txMeta = this.txStateManager.getTx(id, metamaskNetworkId, isThetaNative) // eslint-disable-line no-param-reassign
+    if (!txMeta) {
+      throw new Error(`Failed to find tx with id ${id} in addTxGasDefaults. Network may still be loading after recent switch.`)
+    }
     if (simulationFails) {
       txMeta.simulationFails = simulationFails
     }
-    if (defaultGasPrice && !txMeta.txParams.gasPrice) {
-      txMeta.txParams.gasPrice = defaultGasPrice
+
+    // gas pricing
+
+    if (txMeta.txParams?.isThetaNative) {
+      const { txParams } = txMeta
+      txParams.gasPrice = THETA_GASPRICE_HEXWEI
+      if (txMeta.type === TRANSACTION_TYPE.SENT_ETHER ||
+      ((txMeta.type === TRANSACTION_TYPE.STAKE || txMeta.type === TRANSACTION_TYPE.UNSTAKE) &&
+        (txParams.thetaTxType === ThetaTxType.DepositStake ||
+          txParams.thetaTxType === ThetaTxType.DepositStakeV2 ||
+          txParams.thetaTxType === ThetaTxType.WithdrawStake
+        )
+      )) {
+        txParams.gas = THETA_GAS_PER_TRANSFER_HEXWEI
+        return txMeta
+      }
     }
-    if (defaultGasLimit && !txMeta.txParams.gas) {
-      txMeta.txParams.gas = defaultGasLimit
+    if (txMeta.metamaskNetworkId === THETAMAINNET_NETWORK_ID && txMeta.txParams) {
+      txMeta.txParams.gasPrice = THETA_GASPRICE_HEXWEI
     }
+
+    const eip1559Compatible = this.gasPricingTracker.getCurrentNetworkEip1559Compatible()
+    const defaults = await this._getDefaultGasPriceParams(txMeta, eip1559Compatible)
+    if (eip1559Compatible) {
+      if (txMeta.origin === 'metamask' && txMeta.txParams?.gasPrice) {
+        // user set fixed gasPrice in legacy mode, so use gasPrice directly
+        delete txMeta.txParams?.maxFeePerGas
+        delete txMeta.txParams?.maxPriorityFeePerGas
+      } else {
+        if (txMeta.origin !== 'metamask' && txMeta.txParams?.gasPrice &&
+          !txMeta.txParams?.maxFeePerGas && !txMeta.txParams?.maxPriorityFeePerGas
+        ) {
+          // dApp suggested fixed gasPrice so use it in eip1559 mode
+          if (txMeta.txParams) {
+            txMeta.txParams.maxFeePerGas = txMeta.txParams?.gasPrice
+            txMeta.txParams.maxPriorityFeePerGas = txMeta.txParams?.gasPrice
+          }
+        } else {
+          if (txMeta.txParams && !txMeta.txParams.maxFeePerGas && defaults?.maxFeePerGas) {
+            txMeta.txParams.maxFeePerGas = defaults?.maxFeePerGas
+          }
+          if (txMeta.txParams && !txMeta.txParams?.maxPriorityFeePerGas && defaults?.maxPriorityFeePerGas) {
+            txMeta.txParams.maxPriorityFeePerGas = defaults?.maxPriorityFeePerGas
+          }
+        }
+        delete txMeta.txParams?.gasPrice
+      }
+    } else {
+      delete txMeta.txParams?.maxFeePerGas
+      delete txMeta.txParams?.maxPriorityFeePerGas
+    }
+    //
+    if (
+      defaults?.gasPrice &&
+      txMeta.txParams &&
+      !txMeta.txParams?.gasPrice &&
+      !txMeta.txParams?.maxFeePerGas && !txMeta.txParams?.maxPriorityFeePerGas
+    ) {
+      txMeta.txParams.gasPrice = defaults.gasPrice // default to legacy gas pricing if no gas price of any type is set
+    }
+
     return txMeta
   }
 
   /**
-   * Gets default gas price, or returns `undefined` if gas price is already set
+   * Gets default gas price params, or returns `undefined` if is already set
    * @param {Object} txMeta - The txMeta object
    * @returns {Promise<string|undefined>} The default gas price
    */
-  async _getDefaultGasPrice (txMeta) {
-    if (txMeta.txParams.gasPrice) {
+  async _getDefaultGasPriceParams (txMeta) {
+    if ((txMeta.txParams.gasPrice && txMeta.txParams.gasPrice !== '0x0') ||
+      (txMeta.txParams.maxFeePerGas && txMeta.txParams.maxPriorityFeePerGas &&
+        txMeta.txParams.maxFeePerGas !== '0x0' && txMeta.txParams.maxPriorityFeePerGas !== '0x0')
+    ) {
       return undefined
     }
-    const gasPrice = await this.query.gasPrice()
+    if (txMeta.metamaskNetworkId === THETAMAINNET_NETWORK_ID) {
+      return { gasPrice: THETA_GASPRICE_HEXWEI }
+    }
 
-    return ethUtil.addHexPrefix(gasPrice.toString(16))
+    const estimates = this.gasPricingTracker.getBasicGasEstimates(txMeta.metamaskNetworkId)
+    if (estimates.average) {
+      if (estimates.baseFee) {
+        return {
+          maxFeePerGas: ethUtil.addHexPrefix(decGWEIToHexWEI((estimates.baseFee * baseFeeMultiplier) + estimates.average)),
+          maxPriorityFeePerGas: ethUtil.addHexPrefix(decGWEIToHexWEI(estimates.average)),
+        }
+      }
+      return {
+        gasPrice: ethUtil.addHexPrefix(decGWEIToHexWEI(estimates.average)),
+      }
+    }
+
+    const gasPrice = await this.query.gasPrice()
+    return {
+      gasPrice: ethUtil.addHexPrefix(gasPrice.toString(16)),
+    }
   }
 
   /**
@@ -306,7 +410,7 @@ export default class TransactionController extends EventEmitter {
       return {}
     } else if (
       txMeta.txParams.to &&
-      txMeta.transactionCategory === SEND_ETHER_ACTION_KEY
+      txMeta.type === TRANSACTION_TYPE.SENT_ETHER
     ) {
       // if there's data in the params, but there's no contract code, it's not a valid transaction
       if (txMeta.txParams.data) {
@@ -335,15 +439,40 @@ export default class TransactionController extends EventEmitter {
    * new transaction contains the same nonce as the previous, is a basic ETH transfer of 0x value to
    * the sender's address, and has a higher gasPrice than that of the previous transaction.
    * @param {number} originalTxId - the id of the txMeta that you want to attempt to cancel
-   * @param {string} [customGasPrice] - the hex value to use for the cancel transaction
+   * @param {string} [customGasPriceParams]
    * @returns {txMeta}
    */
-  async createCancelTransaction (originalTxId, customGasPrice) {
+  async createCancelTransaction (originalTxId, customGasPriceParams) {
     const originalTxMeta = this.txStateManager.getTx(originalTxId)
     const { txParams } = originalTxMeta
-    const { gasPrice: lastGasPrice, from, nonce } = txParams
+    const { gasPrice: lastGasPrice, maxFeePerGas: lastMaxFeePerGas, maxPriorityFeePerGas: lastMaxPriorityFeePerGas, from, nonce } = txParams
 
-    const newGasPrice = customGasPrice || bnToHex(BnMultiplyByFraction(hexToBn(lastGasPrice), 11, 10))
+    let lastGasPriceParams
+    if (lastGasPrice) {
+      lastGasPriceParams = { gasPrice: lastGasPrice }
+    } else {
+      lastGasPriceParams = { maxFeePerGas: lastMaxFeePerGas, maxPriorityFeePerGas: lastMaxPriorityFeePerGas }
+    }
+
+    let newGasPriceParams
+    if (customGasPriceParams?.gasPrice || (lastGasPrice && !customGasPriceParams?.maxPriorityFeePerGas)) {
+      newGasPriceParams = { gasPrice: customGasPriceParams?.gasPrice || bnToHex(BnMultiplyByFraction(hexToBn(lastGasPrice), 11, 10)) }
+    } else {
+      let maxPriorityFeePerGas = customGasPriceParams?.maxPriorityFeePerGas
+      if (!maxPriorityFeePerGas) {
+        const bnLast = hexToBn(lastMaxFeePerGas)
+        let tmp = BnMultiplyByFraction(bnLast, 11, 10)
+        if (!tmp.gte(bnLast.add(new BN(1)))) {
+          tmp = bnLast.add(new BN(1))
+        }
+        maxPriorityFeePerGas = bnToHex(tmp)
+      }
+      newGasPriceParams = {
+        maxFeePerGas: customGasPriceParams?.maxFeePerGas || bnToHex(BnMultiplyByFraction(hexToBn(lastMaxFeePerGas), 11, 10)),
+        maxPriorityFeePerGas,
+      }
+    }
+
     const newTxMeta = this.txStateManager.generateTxMeta({
       txParams: {
         from,
@@ -351,12 +480,12 @@ export default class TransactionController extends EventEmitter {
         nonce,
         gas: '0x5208',
         value: '0x0',
-        gasPrice: newGasPrice,
+        ...newGasPriceParams,
       },
-      lastGasPrice,
+      lastGasPriceParams,
       loadingDefaults: false,
-      status: TRANSACTION_STATUS_APPROVED,
-      type: TRANSACTION_TYPE_CANCEL,
+      status: TRANSACTION_STATUS.APPROVED,
+      type: TRANSACTION_TYPE.CANCEL,
     })
 
     this.addTx(newTxMeta)
@@ -370,26 +499,58 @@ export default class TransactionController extends EventEmitter {
    * the same gas limit and a 10% higher gas price, though it is possible to set a custom value for
    * each instead.
    * @param {number} originalTxId - the id of the txMeta that you want to speed up
-   * @param {string} [customGasPrice] - The new custom gas price, in hex
+   * @param {string} [customGasPriceParams]
    * @param {string} [customGasLimit] - The new custom gas limt, in hex
    * @returns {txMeta}
    */
-  async createSpeedUpTransaction (originalTxId, customGasPrice, customGasLimit) {
+  async createSpeedUpTransaction (originalTxId, customGasPriceParams, customGasLimit) {
     const originalTxMeta = this.txStateManager.getTx(originalTxId)
     const { txParams } = originalTxMeta
-    const { gasPrice: lastGasPrice } = txParams
+    const { gasPrice: lastGasPrice, maxFeePerGas: lastMaxFeePerGas, maxPriorityFeePerGas: lastMaxPriorityFeePerGas } = txParams
 
-    const newGasPrice = customGasPrice || bnToHex(BnMultiplyByFraction(hexToBn(lastGasPrice), 11, 10))
+    let lastGasPriceParams
+    if (lastGasPrice) {
+      lastGasPriceParams = { gasPrice: lastGasPrice }
+    } else {
+      lastGasPriceParams = { maxFeePerGas: lastMaxFeePerGas, maxPriorityFeePerGas: lastMaxPriorityFeePerGas }
+    }
+
+    let newGasPriceParams
+    if (customGasPriceParams?.gasPrice || (lastGasPrice && !customGasPriceParams?.maxPriorityFeePerGas)) {
+      newGasPriceParams = { gasPrice: customGasPriceParams?.gasPrice || bnToHex(BnMultiplyByFraction(hexToBn(lastGasPrice), 11, 10)) }
+    } else {
+      let maxPriorityFeePerGas = customGasPriceParams?.maxPriorityFeePerGas
+      if (!maxPriorityFeePerGas) {
+        const bnLast = hexToBn(lastMaxFeePerGas)
+        let tmp = BnMultiplyByFraction(bnLast, 11, 10)
+        if (!tmp.gte(bnLast.add(new BN(1)))) {
+          tmp = bnLast.add(new BN(1))
+        }
+        maxPriorityFeePerGas = bnToHex(tmp)
+      }
+      newGasPriceParams = {
+        maxFeePerGas: customGasPriceParams?.maxFeePerGas || bnToHex(BnMultiplyByFraction(hexToBn(lastMaxFeePerGas), 11, 10)),
+        maxPriorityFeePerGas,
+      }
+    }
+
+    let newTxParams = {
+      ...txParams,
+    }
+    delete newTxParams.gasPrice
+    delete newTxParams.maxFeePerGas
+    delete newTxParams.maxPriorityFeePerGas
+    newTxParams = {
+      ...newTxParams,
+      ...newGasPriceParams,
+    }
 
     const newTxMeta = this.txStateManager.generateTxMeta({
-      txParams: {
-        ...txParams,
-        gasPrice: newGasPrice,
-      },
-      lastGasPrice,
+      txParams: newTxParams,
+      lastGasPriceParams,
       loadingDefaults: false,
-      status: TRANSACTION_STATUS_APPROVED,
-      type: TRANSACTION_TYPE_RETRY,
+      status: TRANSACTION_STATUS.APPROVED,
+      type: TRANSACTION_TYPE.RETRY,
     })
 
     if (customGasLimit) {
@@ -432,6 +593,7 @@ export default class TransactionController extends EventEmitter {
     // we need to keep track of what is currently being signed,
     // So that we do not increment nonce + resubmit something
     // that is already being incremented & signed.
+
     if (this.inProcessOfSigning.has(txId)) {
       return
     }
@@ -448,9 +610,9 @@ export default class TransactionController extends EventEmitter {
       customNonceValue = Number(customNonceValue)
       nonceLock = await this.nonceTracker.getNonceLock(fromAddress)
       // add nonce to txParams
-      // if txMeta has lastGasPrice then it is a retry at same nonce with higher
+      // if txMeta has lastGasPriceParams then it is a retry at same nonce with higher
       // gas price transaction and their for the nonce should not be calculated
-      const nonce = txMeta.lastGasPrice ? txMeta.txParams.nonce : nonceLock.nextNonce
+      const nonce = txMeta.lastGasPriceParams ? txMeta.txParams.nonce : nonceLock.nextNonce
       const customOrNonce = (customNonceValue === 0) ? customNonceValue : customNonceValue || nonce
 
       txMeta.txParams.nonce = ethUtil.addHexPrefix(customOrNonce.toString(16))
@@ -460,9 +622,16 @@ export default class TransactionController extends EventEmitter {
         txMeta.nonceDetails.customNonceValue = customNonceValue
       }
       this.txStateManager.updateTx(txMeta, 'transactions#approveTransaction')
-      // sign transaction
-      const rawTx = await this.signTransaction(txId)
-      await this.publishTransaction(txId, rawTx)
+
+      // sign and publish transaction
+      if (txMeta.metamaskNetworkId === THETAMAINNET_NETWORK_ID && txMeta.txParams.isThetaNative) {
+        const rawTx = await this.signThetaTransaction(txId)
+        await this.publishThetaTransaction(txId, rawTx)
+      } else {
+        const rawTx = await this.signTransaction(txId)
+        await this.publishTransaction(txId, rawTx)
+      }
+
       // must set transaction to submitted/failed before releasing lock
       nonceLock.releaseLock()
     } catch (err) {
@@ -494,9 +663,24 @@ export default class TransactionController extends EventEmitter {
     const chainId = this.getChainId()
     const txParams = { ...txMeta.txParams, chainId }
     // sign tx
-    const fromAddress = txParams.from
-    const ethTx = new Transaction(txParams)
-    await this.signEthTx(ethTx, fromAddress)
+    const useTxParams = { gasLimit: txParams.gas, ...txParams }
+    const fromAddress = useTxParams.from
+    let ethTx
+    if (useTxParams.maxFeePerGas) {
+      const common = Common.isSupportedChainId(chainId)
+        ? new Common({ chain: chainId, hardfork: 'london' })
+        : Common.custom({ chainId }, { baseChain: 1, hardfork: 'london' })
+      const unsignedEthTx = new FeeMarketEIP1559Transaction(useTxParams, { common })
+      await this.signEthTx(unsignedEthTx, fromAddress)
+      ethTx = unsignedEthTx.etc.signedTx
+    } else {
+      const common = Common.isSupportedChainId(chainId)
+        ? new Common({ chain: chainId, hardfork: 'berlin' })
+        : Common.custom({ chainId }, { baseChain: 1, hardfork: 'berlin' })
+      const unsignedEthTx = new Transaction(useTxParams, { common })
+      await this.signEthTx(unsignedEthTx, fromAddress)
+      ethTx = unsignedEthTx.etc.signedTx
+    }
 
     // add r,s,v values for provider request purposes see createMetamaskMiddleware
     // and JSON rpc standard for further explanation
@@ -510,6 +694,119 @@ export default class TransactionController extends EventEmitter {
     this.txStateManager.setTxStatusSigned(txMeta.id)
     const rawTx = ethUtil.bufferToHex(ethTx.serialize())
     return rawTx
+  }
+
+  async signThetaTransaction (txId) {
+    const txMeta = this.txStateManager.getTx(txId)
+
+    // add additional data to txParams
+    const chainId = addHexPrefix(parseInt(this.getChainId()).toString(16)) // eslint-disable-line radix
+    const txParams = {
+      ...txMeta.txParams,
+      chainId,
+      gasLimit: txMeta.txParams.gas,
+    }
+
+    // get tx in native theta format
+    let thetaTx
+    const sequence = parseInt(txParams.nonce, 16) + 1 // theta nonce is one higher than MM expects (eth starts at 0, theta starts at 1) and theta TX expects int not hex
+    switch (txParams.thetaTxType) {
+      case ThetaTxType.Send: {
+        const thetaTxData = {
+          from: txParams.from,
+          outputs: [{
+            address: txParams.to,
+            tfuelWei: new BigNumber(txParams.value),
+            thetaWei: new BigNumber(txParams.value2 || '0x0'),
+          }],
+          sequence,
+        }
+        thetaTx = new thetajs.transactions.SendTransaction(thetaTxData)
+        break
+      }
+      case ThetaTxType.SmartContract: {
+        const thetaTxData = {
+          from: txParams.from,
+          to: txParams.to,
+          value: new BigNumber(txParams.value),
+          thetaValue: new BigNumber(txParams.value2 || '0x0'),
+          data: txParams.data,
+          sequence,
+        }
+        thetaTx = new thetajs.transactions.SmartContractTransaction(thetaTxData)
+        break
+      }
+      case ThetaTxType.DepositStakeV2: {
+        const thetaTxData = {
+          source: txParams.from,
+          holderSummary: txParams.additional.holderSummary,
+          purpose: txParams.additional.purpose,
+          amount: txParams.additional.purpose === thetajs.constants.StakePurpose.StakeForEliteEdge ? txParams.value : txParams.value2,
+          sequence,
+        }
+        thetaTx = new thetajs.transactions.DepositStakeV2Transaction(thetaTxData)
+        break
+      }
+      case ThetaTxType.WithdrawStake: {
+        const thetaTxData = {
+          source: txParams.from,
+          holder: txParams.to,
+          purpose: txParams.additional.purpose,
+          sequence,
+        }
+        thetaTx = new thetajs.transactions.WithdrawStakeTransaction(thetaTxData)
+        break
+      }
+      case ThetaTxType.DepositStake: {
+        const thetaTxData = {
+          source: txParams.from,
+          holder: txParams.to,
+          purpose: txParams.additional.purpose,
+          amount: txParams.additional.purpose === thetajs.constants.StakePurpose.StakeForEliteEdge ? txParams.value : txParams.value2,
+          sequence,
+        }
+        thetaTx = new thetajs.transactions.DepositStakeTransaction(thetaTxData)
+        break
+      }
+      default:
+        throw new Error(`TransactionController: theta native transaction type "${txMeta.txParams.thetaTxType}" not supported`)
+    }
+
+    // sign theta tx wrapped in eth wrapper
+    const thetaChainID = THETAMAINNET_CHAIN_ID_STR
+    const encodedChainID = ethUtil.rlp.encode(Bytes.fromString(thetaChainID)).toString('hex')
+    const encodedTxType = ethUtil.rlp.encode(Bytes.fromNumber(txParams.thetaTxType)).toString('hex')
+    const encodedTx = ethUtil.rlp.encode(thetaTx.rlpInput()).toString('hex')
+    const payload = `0x${encodedChainID}${encodedTxType}${encodedTx}`
+    const unsignedEthTx = new Transaction({
+      nonce: '0x0',
+      gasPrice: '0x0',
+      gasLimit: '0x0',
+      to: '0x0000000000000000000000000000000000000000',
+      value: '0x0',
+      data: payload,
+    }, { chain: 'mainnet', hardfork: 'byzantium' })
+    // const signedEthTx = await this.signEthTx(unsignedEthTx, txParams.from)
+    await this.signEthTx(unsignedEthTx, txParams.from)
+    const signedEthTx = unsignedEthTx.etc.signedTx
+
+    // add r,s,v values for provider request purposes
+    txMeta.r = `0x${ethUtil.bufferToHex(signedEthTx.r).slice(2).padStart(64, '0')}`
+    txMeta.s = `0x${ethUtil.bufferToHex(signedEthTx.s).slice(2).padStart(64, '0')}`
+    txMeta.v = `0x${(parseInt(signedEthTx.v.toString('hex'), 16) - 37).toString().padStart(2, '0')}`
+    // get signed TX bytes in native theta format
+    const signature = txMeta.r + txMeta.s.slice(2) + txMeta.v.slice(2)
+    thetaTx.setSignature(signature)
+    const signedTxRaw = `0x${thetajs.transactions.serialize(thetaTx)}`
+
+    // update state
+    this.txStateManager.updateTx(
+      txMeta,
+      'transactions#signTransaction: add r, s, v values',
+    )
+    this.txStateManager.setTxStatusSigned(txMeta.id)
+
+    return signedTxRaw
   }
 
   /**
@@ -533,6 +830,68 @@ export default class TransactionController extends EventEmitter {
         throw error
       }
     }
+    this.setTxHash(txId, txHash)
+
+    this.txStateManager.setTxStatusSubmitted(txId)
+  }
+
+  async publishThetaTransaction (txId, rawTx) {
+    const txMeta = this.txStateManager.getTx(txId)
+    txMeta.rawTx = rawTx
+    this.txStateManager.updateTx(
+      txMeta,
+      'transactions#publishTransaction',
+    )
+    let txHash
+    try {
+      txHash = await new Promise((resolve, reject) => {
+        request({ // may want to move this requester and parser into transaction utils like isSmartContract and use defaults for most params
+          url: THETAMAINNET_NATIVE_RPC_URL,
+          method: 'post',
+          json: true,
+          headers: { 'Content-Type': 'application/json' },
+          body: {
+            jsonrpc: '2.0',
+            method: 'theta.BroadcastRawTransactionAsync',
+            params: [{
+              tx_bytes: rawTx,
+            }],
+            id: 1,
+          },
+        }, (err, res, body) => {
+          if (err) {
+            log.error('ERROR broadcasting theta tx: ', JSON.stringify(err))
+            reject(err)
+            return
+          }
+          if (body.error) {
+            log.error('ERROR broadcasting theta tx: ', JSON.stringify(body.error))
+            reject(new Error(body.error?.message))
+            return
+          }
+          log.debug(res)
+          log.debug(`statusCode: ${res.statusCode}`)
+          if (res.statusCode === 200) {
+            // may want to use Theta's CallSmartContract to estimate gas first and that can give the revert error PRIOR to sending
+            const obj = body
+            const hash = obj?.result?.hash
+            log.info(`theta tx submitted with txHash ${hash}`)
+            resolve(hash)
+          } else {
+            const error = `Error HTTP ${res.statusCode} when broadcasting transaction to Native Theta RPC`
+            reject(error)
+          }
+        })
+      })
+    } catch (error) {
+      log.error('Failed to broadcast tx: ', error)
+      txMeta.warning = {
+        error,
+        message: error,
+      }
+      throw error
+    }
+
     this.setTxHash(txId, txHash)
 
     this.txStateManager.setTxStatusSubmitted(txId)
@@ -657,7 +1016,7 @@ export default class TransactionController extends EventEmitter {
     })
 
     this.txStateManager.getFilteredTxList({
-      status: TRANSACTION_STATUS_APPROVED,
+      status: TRANSACTION_STATUS.APPROVED,
     }).forEach((txMeta) => {
       const txSignError = new Error('Transaction found as "approved" during boot - possibly stuck during signing')
       this.txStateManager.setTxStatusFailed(txMeta.id, txSignError)
@@ -692,41 +1051,107 @@ export default class TransactionController extends EventEmitter {
     })
   }
 
+  _getTransactionName ({ data, to }) {
+    if (data && Object.keys(theta.contracts).includes(to)) {
+      const fourBytes = data.slice(2, 10)
+      switch (fourBytes) {
+        case theta.fourBytes.deposit: return 'wrap'
+        case theta.fourBytes.withdraw: return 'unwrap'
+        default:
+      }
+    }
+    const { name } = (data && abiDecoder.decodeMethod(data)) || {}
+    return name
+  }
+
   /**
     Returns a "type" for a transaction out of the following list: simpleSend, tokenTransfer, tokenApprove,
     contractDeployment, contractMethodCall
   */
-  async _determineTransactionCategory (txParams) {
-    const { data, to } = txParams
-    const { name } = (data && abiDecoder.decodeMethod(data)) || {}
+  async _determineTransactionType (txParams, networkIdOrChainId) {
+    const { data, to, isThetaNative } = txParams
+
+    if (isThetaNative) {
+      const functionSig = data?.slice(0, 10)
+      let staking
+      if (to === theta.contracts.WTFUEL || to === theta.contracts.WTHETA) {
+        let type
+        switch (functionSig) {
+          case theta.fourBytes.deposit:
+            type = TRANSACTION_TYPE.TOKEN_METHOD_WRAP
+            break
+          case theta.fourBytes.withdraw:
+            type = TRANSACTION_TYPE.TOKEN_METHOD_UNWRAP
+            break
+          default:
+        }
+        if (type) {
+          return { type, getCodeResponse: undefined }
+        }
+      } else if ((staking = Object.values(thetaTokens).filter((t) => to === t.staking?.stakingAddress.toLowerCase())[0]?.staking)) {
+        let type
+        switch (functionSig) {
+          case staking.functionSigs.stake:
+            type = TRANSACTION_TYPE.STAKE
+            break
+          case staking.functionSigs.unstake:
+          case staking.functionSigs.unstakeShares:
+            type = TRANSACTION_TYPE.UNSTAKE
+            break
+          default:
+        }
+        if (type) {
+          return { type, getCodeResponse: undefined }
+        }
+      } else {
+        const { thetaTxType } = txParams
+        if (thetaTxType === ThetaTxType.DepositStake || thetaTxType === ThetaTxType.DepositStakeV2) {
+          return { type: TRANSACTION_TYPE.STAKE, getCodeResponse: undefined }
+        } else if (thetaTxType === ThetaTxType.WithdrawStake) {
+          return { type: TRANSACTION_TYPE.UNSTAKE, getCodeResponse: undefined }
+        }
+        if (thetaTxType === ThetaTxType.SmartContract) {
+          const stakingToken = Object.values(thetaTokens).filter((t) => t.staking?.stakingAddress === to)[0]
+          if (stakingToken) {
+            if (functionSig === stakingToken.staking.stake) {
+              return { type: TRANSACTION_TYPE.STAKE, getCodeResponse: undefined }
+            } else if (functionSig === stakingToken.staking.unstake || functionSig === stakingToken.staking.unstakeShares) {
+              return { type: TRANSACTION_TYPE.UNSTAKE, getCodeResponse: undefined }
+            }
+          }
+        }
+      }
+    }
+
+    const name = this._getTransactionName({ data, to })
     const tokenMethodName = [
-      TOKEN_METHOD_APPROVE,
-      TOKEN_METHOD_TRANSFER,
-      TOKEN_METHOD_TRANSFER_FROM,
-    ].find((methodName) => methodName === name && name.toLowerCase())
+      TRANSACTION_TYPE.TOKEN_METHOD_APPROVE,
+      TRANSACTION_TYPE.TOKEN_METHOD_TRANSFER,
+      TRANSACTION_TYPE.TOKEN_METHOD_TRANSFER_FROM,
+      TRANSACTION_TYPE.TOKEN_METHOD_WRAP,
+      TRANSACTION_TYPE.TOKEN_METHOD_UNWRAP,
+    ].find((methodName) => methodName === name?.toLowerCase())?.toLowerCase()
 
     let result
     if (txParams.data && tokenMethodName) {
       result = tokenMethodName
     } else if (txParams.data && !to) {
-      result = DEPLOY_CONTRACT_ACTION_KEY
+      result = TRANSACTION_TYPE.DEPLOY_CONTRACT
     }
 
     let code
     if (!result) {
       try {
-        code = await this.query.getCode(to)
+        code = to && await getCode(to, networkIdOrChainId)
       } catch (e) {
         code = null
         log.warn(e)
       }
-
       const codeIsEmpty = !code || code === '0x' || code === '0x0'
-
-      result = codeIsEmpty ? SEND_ETHER_ACTION_KEY : CONTRACT_INTERACTION_KEY
+      result = codeIsEmpty ? TRANSACTION_TYPE.SENT_ETHER : TRANSACTION_TYPE.CONTRACT_INTERACTION
     }
 
-    return { transactionCategory: result, getCodeResponse: code }
+    return { type: result, getCodeResponse: code }
   }
 
   /**

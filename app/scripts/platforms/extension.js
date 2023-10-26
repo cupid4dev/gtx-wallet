@@ -1,7 +1,8 @@
 import extension from 'extensionizer'
-import { createExplorerLink as explorerLink } from '@metamask/etherscan-link'
 import { getEnvironmentType, checkForError } from '../lib/util'
 import { ENVIRONMENT_TYPE_BACKGROUND } from '../lib/enums'
+import { getBlockExplorerUrlForTx } from '../../../ui/helpers/utils/transactions.util'
+import { THETAMAINNET_EXPLORER_URL, THETAMAINNET_NETWORK_ID } from '../controllers/network/enums'
 
 export default class ExtensionPlatform {
 
@@ -190,11 +191,14 @@ export default class ExtensionPlatform {
 
     this._subscribeToNotificationClicked()
 
-    const url = explorerLink(txMeta.hash, txMeta.metamaskNetworkId)
+    const rpcPrefs = txMeta.metamaskNetworkId === THETAMAINNET_NETWORK_ID
+      ? { blockExplorerUrl: THETAMAINNET_EXPLORER_URL }
+      : undefined
+    const url = getBlockExplorerUrlForTx(txMeta.metamaskNetworkId, txMeta.hash, rpcPrefs)
     const nonce = parseInt(txMeta.txParams.nonce, 16)
 
     const title = 'Confirmed transaction'
-    const message = `Transaction ${nonce} confirmed! View on Etherscan`
+    const message = `Transaction ${nonce} confirmed! View on ${url.indexOf('etherscan') === -1 ? 'explorer' : 'Etherscan'}`
     this._showNotification(title, message, url)
   }
 

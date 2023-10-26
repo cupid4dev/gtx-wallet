@@ -7,18 +7,19 @@ import { getEnvironmentType } from '../app/scripts/lib/util'
 import { ALERT_TYPES } from '../app/scripts/controllers/alert'
 import { SENTRY_STATE } from '../app/scripts/lib/setupSentry'
 import { ENVIRONMENT_TYPE_POPUP } from '../app/scripts/lib/enums'
-import Root from './app/pages'
-import * as actions from './app/store/actions'
-import configureStore from './app/store/store'
+import Root from './pages'
+import * as actions from './store/actions'
+import configureStore from './store/store'
 import txHelper from './lib/tx-helper'
-import { fetchLocale, loadRelativeTimeFormatLocaleData } from './app/helpers/utils/i18n-helper'
-import switchDirection from './app/helpers/utils/switch-direction'
-import { getPermittedAccountsForCurrentTab, getSelectedAddress } from './app/selectors'
-import { ALERT_STATE } from './app/ducks/alerts/unconnected-account'
+import { fetchLocale, loadRelativeTimeFormatLocaleData } from './helpers/utils/i18n-helper'
+import switchDirection from './helpers/utils/switch-direction'
+import { getPermittedAccountsForCurrentTab, getSelectedAddress } from './selectors'
+import { ALERT_STATE } from './ducks/alerts/unconnected-account'
 import {
   getUnconnectedAccountAlertEnabledness,
   getUnconnectedAccountAlertShown,
-} from './app/ducks/metamask/metamask'
+} from './ducks/metamask/metamask'
+import { NETWORK_TYPE_TO_ID_MAP } from '../app/scripts/controllers/network/enums'
 
 log.setLevel(global.METAMASK_DEBUG ? 'debug' : 'warn')
 
@@ -104,6 +105,8 @@ async function startApp (metamaskState, backgroundConnection, opts) {
     metamaskState.unapprovedEncryptionPublicKeyMsgs,
     metamaskState.unapprovedTypedMessages,
     metamaskState.network,
+    NETWORK_TYPE_TO_ID_MAP[metamaskState.provider?.type]?.chainId || metamaskState.provider?.chainId,
+    metamaskState.provider?.rpcPrefs?.selectedNative,
   )
   const numberOfUnapprivedTx = unapprovedTxsAll.length
   if (numberOfUnapprivedTx > 0) {

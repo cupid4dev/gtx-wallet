@@ -1,6 +1,7 @@
 import namehash from 'eth-ens-namehash'
 import Eth from 'ethjs-query'
 import EthContract from 'ethjs-contract'
+import ensNetworkMap from 'ethereum-ens-network-map'
 import contentHash from 'content-hash'
 import registryAbi from './contracts/registry'
 import resolverAbi from './contracts/resolver'
@@ -56,18 +57,9 @@ function hexValueIsEmpty (value) {
 
 /**
  * Returns the registry address for the given chain ID
- * @param {number} chainId the chain ID
+ * @param {number} networkId the base-10 chain ID as a string
  * @returns {string|null} the registry address if known, null otherwise
  */
-function getRegistryForChainId (chainId) {
-  switch (chainId) {
-    case 1:
-    case 3:
-    case 4:
-    case 5:
-      // Mainnet, Ropsten, Rinkeby, and Goerli, respectively, use the same address
-      return '0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e'
-    default:
-      return null
-  }
+function getRegistryForChainId (networkId) {
+  return ensNetworkMap[networkId?.toString()] ?? null
 }

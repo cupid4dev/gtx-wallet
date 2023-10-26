@@ -17,21 +17,21 @@ module.exports = createStyleTasks
 function createStyleTasks ({ livereload }) {
 
   const prod = createTask('styles:prod', createScssBuildTask({
-    src: 'ui/app/css/index.scss',
-    dest: 'ui/app/css/output',
+    src: 'ui/css/index.scss',
+    dest: 'ui/css/output',
     devMode: false,
   }))
 
   const dev = createTask('styles:dev', createScssBuildTask({
-    src: 'ui/app/css/index.scss',
-    dest: 'ui/app/css/output',
+    src: 'ui/css/index.scss',
+    dest: 'ui/css/output',
     devMode: true,
-    pattern: 'ui/app/**/*.scss',
+    pattern: 'ui/**/*.scss',
   }))
 
   const lint = createTask('lint-scss', function () {
     return gulp
-      .src('ui/app/css/itcss/**/*.scss')
+      .src('ui/css/itcss/**/*.scss')
       .pipe(gulpStylelint({
         reporters: [
           { formatter: 'string', console: true },

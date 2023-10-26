@@ -1,6 +1,6 @@
 import assert from 'assert'
-import reduceMetamask from '../../../../../ui/app/ducks/metamask/metamask'
-import * as actionConstants from '../../../../../ui/app/store/actionConstants'
+import reduceMetamask from '../../../../../ui/ducks/metamask/metamask'
+import * as actionConstants from '../../../../../ui/store/actionConstants'
 
 describe('MetaMask Reducers', function () {
 
@@ -107,11 +107,15 @@ describe('MetaMask Reducers', function () {
 
   it('updates send gas price', function () {
     const state = reduceMetamask({}, {
-      type: actionConstants.UPDATE_GAS_PRICE,
-      value: '0xGasPrice',
+      type: actionConstants.UPDATE_GAS_PRICE_PARAMS,
+      value: {
+        gasPrice: '0xGasPrice',
+      },
     })
 
-    assert.equal(state.send.gasPrice, '0xGasPrice')
+    assert.equal(JSON.stringify(state.send.gasPriceParams), JSON.stringify({
+      gasPrice: '0xGasPrice',
+    }))
   })
 
   it('toggles account menu ', function () {

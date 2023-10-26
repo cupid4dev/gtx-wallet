@@ -24,12 +24,11 @@ import {
   ENVIRONMENT_TYPE_FULLSCREEN,
   ENVIRONMENT_TYPE_POPUP,
 } from './lib/enums'
-import { getEnvironmentType } from './lib/util'
+import { getEnvironmentType, hexToBn } from './lib/util'
 
 start().catch(log.error)
 
 async function start () {
-
   // create platform global
   global.platform = new ExtensionPlatform()
 
@@ -51,7 +50,8 @@ async function start () {
   initializeUiWithTab(activeTab)
 
   function displayCriticalError (container, err) {
-    container.innerHTML = '<div class="critical-error">The MetaMask app failed to load: please open and close MetaMask again to restart.</div>'
+    container.innerHTML =
+      '<div class="critical-error">The GTx Wallet app failed to load: please open and close GTx Wallet again to restart.</div>'
     container.style.height = '80px'
     log.error(err.stack)
     throw err
@@ -139,6 +139,52 @@ function setupWeb3Connection (connectionStream) {
   global.ethereumProvider = providerStream
   global.ethQuery = new EthQuery(providerStream)
   global.eth = new Eth(providerStream)
+
+  _addMaxPriorityFeePerGasToEth()
+  _addFeeHistoryToEth()
+}
+
+function _addMaxPriorityFeePerGasToEth () {
+  const query = global.ethQuery
+  global.eth.maxPriorityFeePerGas = function (...args) {
+    return new Promise((resolve, reject) => {
+      query.sendAsync({
+        method: 'eth_maxPriorityFeePerGas',
+        params: args,
+      }, cb)
+      function cb (err, res) {
+        if (err) {
+          reject(err)
+        } else {
+          resolve(hexToBn(res))
+        }
+      }
+    })
+  }
+}
+
+function _addFeeHistoryToEth () {
+  const query = global.ethQuery
+  global.eth.feeHistory = function (...args) {
+    return new Promise((resolve, reject) => {
+      query.sendAsync({
+        method: 'eth_feeHistory',
+        params: args,
+      }, cb)
+      function cb (err, res) {
+        if (err) {
+          reject(err)
+        } else {
+          res.baseFeePerGas = res.baseFeePerGas.map((e) => hexToBn(e))
+          res.oldestBlock = hexToBn(res.oldestBlock)
+          res.reward.forEach((subArr, i) => {
+            res.reward[i] = subArr.map((e) => hexToBn(e))
+          })
+          resolve(res)
+        }
+      }
+    })
+  }
 }
 
 /**

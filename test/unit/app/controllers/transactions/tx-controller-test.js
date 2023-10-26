@@ -5,17 +5,8 @@ import EthTx from 'ethereumjs-tx'
 import ObservableStore from 'obs-store'
 import sinon from 'sinon'
 import TransactionController from '../../../../../app/scripts/controllers/transactions'
-import { TRANSACTION_TYPE_RETRY } from '../../../../../app/scripts/controllers/transactions/enums'
-
-import {
-  TOKEN_METHOD_APPROVE,
-  TOKEN_METHOD_TRANSFER,
-  SEND_ETHER_ACTION_KEY,
-  DEPLOY_CONTRACT_ACTION_KEY,
-  CONTRACT_INTERACTION_KEY,
-} from '../../../../../ui/app/helpers/constants/transactions'
-
 import { createTestProviderTools, getTestAccounts } from '../../../../stub/provider'
+import { TRANSACTION_TYPE } from '../../../../../shared/constants/transaction'
 
 const noop = () => true
 const currentNetworkId = '42'
@@ -404,7 +395,7 @@ describe('Transaction Controller', function () {
       const { lastGasPrice, type } = addTxArgs
       assert.deepEqual({ lastGasPrice, type }, {
         lastGasPrice: '0xa',
-        type: TRANSACTION_TYPE_RETRY,
+        type: TRANSACTION_TYPE.RETRY,
       })
     })
 
@@ -424,7 +415,7 @@ describe('Transaction Controller', function () {
       const { lastGasPrice, type } = result
       assert.deepEqual({ lastGasPrice, type }, {
         lastGasPrice: '0xa',
-        type: TRANSACTION_TYPE_RETRY,
+        type: TRANSACTION_TYPE.RETRY,
       })
     })
   })
@@ -483,56 +474,56 @@ describe('Transaction Controller', function () {
     })
   })
 
-  describe('#_determineTransactionCategory', function () {
-    it('should return a simple send transactionCategory when to is truthy but data is falsy', async function () {
-      const result = await txController._determineTransactionCategory({
+  describe('#_determineType', function () {
+    it('should return a simple send type when to is truthy but data is falsy', async function () {
+      const result = await txController._determineType({
         to: '0xabc',
         data: '',
       })
-      assert.deepEqual(result, { transactionCategory: SEND_ETHER_ACTION_KEY, getCodeResponse: null })
+      assert.deepEqual(result, { type: TRANSACTION_TYPE.SENT_ETHER, getCodeResponse: null })
     })
 
-    it('should return a token transfer transactionCategory when data is for the respective method call', async function () {
-      const result = await txController._determineTransactionCategory({
+    it('should return a token transfer type when data is for the respective method call', async function () {
+      const result = await txController._determineType({
         to: '0xabc',
         data: '0xa9059cbb0000000000000000000000002f318C334780961FB129D2a6c30D0763d9a5C970000000000000000000000000000000000000000000000000000000000000000a',
       })
-      assert.deepEqual(result, { transactionCategory: TOKEN_METHOD_TRANSFER, getCodeResponse: undefined })
+      assert.deepEqual(result, { type: TRANSACTION_TYPE.TOKEN_METHOD_TRANSFER, getCodeResponse: undefined })
     })
 
-    it('should return a token approve transactionCategory when data is for the respective method call', async function () {
-      const result = await txController._determineTransactionCategory({
+    it('should return a token approve type when data is for the respective method call', async function () {
+      const result = await txController._determineType({
         to: '0xabc',
         data: '0x095ea7b30000000000000000000000002f318C334780961FB129D2a6c30D0763d9a5C9700000000000000000000000000000000000000000000000000000000000000005',
       })
-      assert.deepEqual(result, { transactionCategory: TOKEN_METHOD_APPROVE, getCodeResponse: undefined })
+      assert.deepEqual(result, { type: TRANSACTION_TYPE.TOKEN_METHOD_APPROVE, getCodeResponse: undefined })
     })
 
-    it('should return a contract deployment transactionCategory when to is falsy and there is data', async function () {
-      const result = await txController._determineTransactionCategory({
+    it('should return a contract deployment type when to is falsy and there is data', async function () {
+      const result = await txController._determineType({
         to: '',
         data: '0xabd',
       })
-      assert.deepEqual(result, { transactionCategory: DEPLOY_CONTRACT_ACTION_KEY, getCodeResponse: undefined })
+      assert.deepEqual(result, { type: TRANSACTION_TYPE.DEPLOY_CONTRACT, getCodeResponse: undefined })
     })
 
-    it('should return a simple send transactionCategory with a 0x getCodeResponse when there is data and but the to address is not a contract address', async function () {
-      const result = await txController._determineTransactionCategory({
+    it('should return a simple send type with a 0x getCodeResponse when there is data and but the to address is not a contract address', async function () {
+      const result = await txController._determineType({
         to: '0x9e673399f795D01116e9A8B2dD2F156705131ee9',
         data: '0xabd',
       })
-      assert.deepEqual(result, { transactionCategory: SEND_ETHER_ACTION_KEY, getCodeResponse: '0x' })
+      assert.deepEqual(result, { type: TRANSACTION_TYPE.SENT_ETHER, getCodeResponse: '0x' })
     })
 
-    it('should return a simple send transactionCategory with a null getCodeResponse when to is truthy and there is data and but getCode returns an error', async function () {
-      const result = await txController._determineTransactionCategory({
+    it('should return a simple send type with a null getCodeResponse when to is truthy and there is data and but getCode returns an error', async function () {
+      const result = await txController._determineType({
         to: '0xabc',
         data: '0xabd',
       })
-      assert.deepEqual(result, { transactionCategory: SEND_ETHER_ACTION_KEY, getCodeResponse: null })
+      assert.deepEqual(result, { type: TRANSACTION_TYPE.SENT_ETHER, getCodeResponse: null })
     })
 
-    it('should return a contract interaction transactionCategory with the correct getCodeResponse when to is truthy and there is data and it is not a token transaction', async function () {
+    it('should return a contract interaction type with the correct getCodeResponse when to is truthy and there is data and it is not a token transaction', async function () {
       const _providerResultStub = {
         // 1 gwei
         eth_gasPrice: '0x0de0b6b3a7640000',
@@ -557,14 +548,14 @@ describe('Transaction Controller', function () {
           resolve()
         }),
       })
-      const result = await _txController._determineTransactionCategory({
+      const result = await _txController._determineType({
         to: '0x9e673399f795D01116e9A8B2dD2F156705131ee9',
         data: 'abd',
       })
-      assert.deepEqual(result, { transactionCategory: CONTRACT_INTERACTION_KEY, getCodeResponse: '0x0a' })
+      assert.deepEqual(result, { type: TRANSACTION_TYPE.CONTRACT_INTERACTION, getCodeResponse: '0x0a' })
     })
 
-    it('should return a contract interaction transactionCategory with the correct getCodeResponse when to is a contract address and data is falsy', async function () {
+    it('should return a contract interaction type with the correct getCodeResponse when to is a contract address and data is falsy', async function () {
       const _providerResultStub = {
         // 1 gwei
         eth_gasPrice: '0x0de0b6b3a7640000',
@@ -589,11 +580,11 @@ describe('Transaction Controller', function () {
           resolve()
         }),
       })
-      const result = await _txController._determineTransactionCategory({
+      const result = await _txController._determineType({
         to: '0x9e673399f795D01116e9A8B2dD2F156705131ee9',
         data: '',
       })
-      assert.deepEqual(result, { transactionCategory: CONTRACT_INTERACTION_KEY, getCodeResponse: '0x0a' })
+      assert.deepEqual(result, { type: TRANSACTION_TYPE.CONTRACT_INTERACTION, getCodeResponse: '0x0a' })
     })
   })
 

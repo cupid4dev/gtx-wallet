@@ -1,6 +1,7 @@
 import { isValidAddress } from 'ethereumjs-util'
-import contractMap from 'eth-contract-metadata'
-import { checksumAddress } from '../app/helpers/utils/util'
+import contractMap from '../../gtx/mergedTokens'
+import { checksumAddress } from '../helpers/utils/util'
+import { normalizeTokenLogoUrl } from '../helpers/utils/token-util'
 
 let iconFactory
 
@@ -50,8 +51,7 @@ function iconExistsFor (address) {
 
 function imageElFor (address) {
   const contract = contractMap[address]
-  const fileName = contract.logo
-  const path = `images/contract/${fileName}`
+  const path = normalizeTokenLogoUrl(contract.logo)
   const img = document.createElement('img')
   img.src = path
   img.style.width = '100%'

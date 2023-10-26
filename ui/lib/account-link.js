@@ -1,5 +1,7 @@
+import { THETAMAINNET_EXPLORER_URL } from '../../app/scripts/controllers/network/enums'
+
 export default function getAccountLink (address, network, rpcPrefs) {
-  if (rpcPrefs && rpcPrefs.blockExplorerUrl) {
+  if (rpcPrefs?.blockExplorerUrl) {
     return `${rpcPrefs.blockExplorerUrl.replace(/\/+$/u, '')}/address/${address}`
   }
 
@@ -18,6 +20,8 @@ export default function getAccountLink (address, network, rpcPrefs) {
       return `https://kovan.etherscan.io/address/${address}`
     case 5: // goerli test net
       return `https://goerli.etherscan.io/address/${address}`
+    case 361: // theta main net
+      return `${THETAMAINNET_EXPLORER_URL}/address/${address}`
     default:
       return ''
   }

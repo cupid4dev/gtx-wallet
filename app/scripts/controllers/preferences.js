@@ -1,7 +1,15 @@
+import Web3 from 'web3'
 import ObservableStore from 'obs-store'
 import { normalize as normalizeAddress } from 'eth-sig-util'
-import { isValidAddress, sha3, bufferToHex } from 'ethereumjs-util'
+import { isValidAddress, toChecksumAddress } from 'ethereumjs-util'
+import abiERC721 from 'human-standard-collectible-abi'
+import log from 'loglevel'
+import { isEqual } from 'lodash'
+import contracts from '../../../gtx/mergedTokens'
+import { normalizeTokenLogoUrl } from '../../../ui/helpers/utils/token-util'
 import { addInternalMethodPrefix } from './permissions'
+
+const ERC721_INTERFACE_ID = '0x80ac58cd'
 
 export default class PreferencesController {
 
@@ -23,7 +31,8 @@ export default class PreferencesController {
    * @property {object} store.knownMethodData Contains all data methods known by the user
    * @property {string} store.currentLocale The preferred language locale key
    * @property {string} store.selectedAddress A hex string that matches the currently selected address in the app
-   *
+   * @property {Object} store.selectedNFT
+   * // TODO: add any missing properties here
    */
   constructor (opts = {}) {
     const initState = {
@@ -42,10 +51,8 @@ export default class PreferencesController {
       // perform sensitive operations.
       featureFlags: {
         showIncomingTransactions: true,
-        transactionTime: false,
       },
       knownMethodData: {},
-      participateInMetaMetrics: null,
       firstTimeFlowType: null,
       currentLocale: opts.initLangCode,
       identities: {},
@@ -57,17 +64,17 @@ export default class PreferencesController {
         useNativeCurrencyAsPrimaryCurrency: true,
       },
       completedOnboarding: false,
-      metaMetricsId: null,
-      metaMetricsSendCount: 0,
 
       // ENS decentralized website resolution
-      ipfsGateway: 'dweb.link', ...opts.initState,
+      ipfsGateway: 'dweb.link',
+
+      ...opts.initState,
     }
 
     this.diagnostics = opts.diagnostics
     this.network = opts.network
     this.store = new ObservableStore(initState)
-    this.store.setMaxListeners(12)
+    this.store.setMaxListeners(16)
     this.openPopup = opts.openPopup
     this._subscribeProviderType()
 
@@ -75,6 +82,18 @@ export default class PreferencesController {
       return this.setFeatureFlag(key, value)
     }
   }
+
+  /**
+   * @type {Object}
+   */
+  set network (network) {
+    if (!network) {
+      return
+    }
+    this._network = network
+    this.web3 = network._provider ? new Web3(network._provider) : null
+  }
+
   // PUBLIC METHODS
 
   /**
@@ -113,33 +132,6 @@ export default class PreferencesController {
    */
   setUsePhishDetect (val) {
     this.store.updateState({ usePhishDetect: val })
-  }
-
-  /**
-   * Setter for the `participateInMetaMetrics` property
-   *
-   * @param {boolean} bool - Whether or not the user wants to participate in MetaMetrics
-   * @returns {string|null} - the string of the new metametrics id, or null if not set
-   *
-   */
-  setParticipateInMetaMetrics (bool) {
-    this.store.updateState({ participateInMetaMetrics: bool })
-    let metaMetricsId = null
-    if (bool && !this.store.getState().metaMetricsId) {
-      metaMetricsId = bufferToHex(sha3(String(Date.now()) + String(Math.round(Math.random() * Number.MAX_SAFE_INTEGER))))
-      this.store.updateState({ metaMetricsId })
-    } else if (bool === false) {
-      this.store.updateState({ metaMetricsId })
-    }
-    return metaMetricsId
-  }
-
-  getParticipateInMetaMetrics () {
-    return this.store.getState().participateInMetaMetrics
-  }
-
-  setMetaMetricsSendCount (val) {
-    this.store.updateState({ metaMetricsSendCount: val })
   }
 
   /**
@@ -392,6 +384,22 @@ export default class PreferencesController {
     return this.store.getState().selectedAddress
   }
 
+  setSelectedNFT (nft) {
+    this.store.updateState({ selectedNFT: nft })
+  }
+
+  getSelectedNFT () {
+    return this.store.getState().selectedNFT
+  }
+
+  setGtxTokens (gtxTokens) {
+    this.store.updateState({ gtxTokens })
+  }
+
+  getGtxTokens () {
+    return this.store.getState().gtxTokens
+  }
+
   /**
    * Contains data about tokens users add to their account.
    * @typedef {Object} AddedToken
@@ -410,12 +418,18 @@ export default class PreferencesController {
    * @param {string} rawAddress - Hex address of the token contract. May or may not be a checksum address.
    * @param {string} symbol - The symbol of the token
    * @param {number} decimals  - The number of decimals the token uses.
+   * @param {string} image  - The coin logo image to use.
+   * @param {string} chainId  - The hexadecimal chainId with 0x prefix.
+   * @param {boolean} isERC721 - If token is ERC/TNT/etc-721 (NFT) or not.
+   * @param {Object} staking - Info on staking of token if any
+   * @param {Object} stakedAsset - staking contract token info if any
+   * @param {Array} skipChainIds - chains to skip token tracking
    * @returns {Promise<array>} - Promises the new array of AddedToken objects.
    *
    */
-  async addToken (rawAddress, symbol, decimals, image) {
+  async addToken (rawAddress, symbol, decimals, image, chainId, isERC721, staking, stakedAsset, skipChainIds, unsendable = false) {
     const address = normalizeAddress(rawAddress)
-    const newEntry = { address, symbol, decimals }
+    const newEntry = { address, symbol, decimals: Number(decimals), staking, stakedAsset, chainId, skipChainIds, unsendable }
     const { tokens } = this.store.getState()
     const assetImages = this.getAssetImages()
     const previousEntry = tokens.find((token) => {
@@ -423,12 +437,28 @@ export default class PreferencesController {
     })
     const previousIndex = tokens.indexOf(previousEntry)
 
+    newEntry.isERC721 = typeof isERC721 === 'undefined' ? await this._detectIsERC721(newEntry.address) : isERC721
+    if (newEntry.isERC721) {
+      newEntry.decimals = 0
+    }
+
     if (previousEntry) {
-      tokens[previousIndex] = newEntry
+      if (newEntry.address !== previousEntry.address || newEntry.symbol !== previousEntry.symbol ||
+        newEntry.decimals?.toString() !== previousEntry.decimals?.toString() ||
+        Boolean(newEntry.isERC721) !== Boolean(previousEntry.isERC721) ||
+        !isEqual(newEntry.staking, previousEntry.staking) ||
+        !isEqual(newEntry.stakedAsset, previousEntry.stakedAsset)
+      ) {
+        tokens[previousIndex] = newEntry
+      }
     } else {
       tokens.push(newEntry)
     }
-    assetImages[address] = image
+
+    const knownLogo = contracts[toChecksumAddress(address)]?.logo
+    const knownLogoFull = knownLogo && normalizeTokenLogoUrl(knownLogo)
+    assetImages[address] = image ?? knownLogoFull ?? assetImages[address]
+
     this._updateAccountTokens(tokens, assetImages)
     return Promise.resolve(tokens)
   }
@@ -479,11 +509,12 @@ export default class PreferencesController {
 
   /**
    * updates custom RPC details
-   *
-   * @param {string} url - The RPC url to add to frequentRpcList.
-   * @param {string} chainId - Optional chainId of the selected network.
-   * @param {string} ticker   - Optional ticker symbol of the selected network.
-   * @param {string} nickname - Optional nickname of the selected network.
+   * @param {object} newRpcDetails - Options
+   * @param {string} newRpcDetails.rpcUrl - The RPC url to add to frequentRpcList.
+   * @param {string} newRpcDetails.chainId - Optional chainId of the selected network.
+   * @param {string} newRpcDetails.ticker   - Optional ticker symbol of the selected network.
+   * @param {string} newRpcDetails.nickname - Optional nickname of the selected network.
+   * @param {object} [newRpcDetails.rpcPrefs] - Optional RPC preferences, such as the block explorer URL and selectedNative
    * @returns {Promise<array>} - Promise resolving to updated frequentRpcList.
    *
    */
@@ -647,7 +678,7 @@ export default class PreferencesController {
    *
    */
   _subscribeProviderType () {
-    this.network.providerStore.subscribe(() => {
+    this._network.providerStore.subscribe(() => {
       const { tokens } = this._getTokenRelatedStates()
       this.store.updateState({ tokens })
     })
@@ -677,6 +708,41 @@ export default class PreferencesController {
   }
 
   /**
+   * Detects whether or not a token is ERC-721 compatible.
+   *
+   * @param {string} tokensAddress - the token contract address.
+   *
+   */
+  async _detectIsERC721 (tokenAddress) {
+    const checksumAddress = toChecksumAddress(tokenAddress)
+    if (contracts[checksumAddress]) {
+      return Boolean(contracts[checksumAddress].erc721)
+    }
+    return await this._queryContractIsERC721(tokenAddress)
+  }
+
+  async _queryContractIsERC721 (tokenAddress) {
+    const ethContract = this.web3.eth.contract(abiERC721).at(tokenAddress)
+    try {
+      return new Promise((resolve) => {
+        ethContract.supportsInterface(ERC721_INTERFACE_ID, (error, result) => {
+          if (error) {
+            if (error.data?.message?.indexOf('revert') !== -1) {
+              return resolve(false)
+            }
+            log.debug(error)
+            return resolve(null)
+          }
+          return resolve(result)
+        })
+      })
+    } catch (err) {
+      log.debug(err)
+      return null
+    }
+  }
+
+  /**
    * A getter for `tokens` and `accountTokens` related states.
    *
    * @param {string} [selectedAddress] A new hex address for an account
@@ -689,7 +755,7 @@ export default class PreferencesController {
       // eslint-disable-next-line no-param-reassign
       selectedAddress = this.store.getState().selectedAddress
     }
-    const providerType = this.network.providerStore.getState().type
+    const providerType = this._network.providerStore.getState().type
     if (!(selectedAddress in accountTokens)) {
       accountTokens[selectedAddress] = {}
     }
@@ -735,8 +801,8 @@ export default class PreferencesController {
     if (!rawAddress || !symbol || typeof decimals === 'undefined') {
       throw new Error(`Cannot suggest token without address, symbol, and decimals`)
     }
-    if (!(symbol.length < 7)) {
-      throw new Error(`Invalid symbol ${symbol} more than six characters`)
+    if (!(symbol.length <= 9)) {
+      throw new Error(`Invalid symbol ${symbol} more than nine characters`)
     }
     const numDecimals = parseInt(decimals, 10)
     if (isNaN(numDecimals) || numDecimals > 36 || numDecimals < 0) {

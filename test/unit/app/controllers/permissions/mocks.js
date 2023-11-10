@@ -76,9 +76,18 @@ const getUnlockPromise = () => Promise.resolve()
  */
 export function getPermControllerOpts () {
   return {
+<<<<<<< HEAD
     showPermissionRequest: noop,
     getKeyringAccounts,
     getUnlockPromise,
+=======
+    approvals: new ApprovalController({
+      showApprovalRequest: noop,
+      defaultApprovalType: 'NO_TYPE',
+    }),
+    getKeyringAccounts: async () => [...keyringAccounts],
+    getUnlockPromise: () => Promise.resolve(),
+>>>>>>> bba2b9646... Update `@metamask/controllers` to v5.1.0 (#10096)
     getRestrictedMethods,
     notifyDomain: noop,
     notifyAllDomains: noop,

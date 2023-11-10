@@ -102,6 +102,14 @@ export default class MetamaskController extends EventEmitter {
     // next, we will initialize the controllers
     // controller initialization order matters
 
+<<<<<<< HEAD
+=======
+    this.approvalController = new ApprovalController({
+      showApprovalRequest: opts.showUserConfirmation,
+      defaultApprovalType: 'NO_TYPE',
+    })
+
+>>>>>>> bba2b9646... Update `@metamask/controllers` to v5.1.0 (#10096)
     this.networkController = new NetworkController(initState.NetworkController)
 
     this.preferencesController = new PreferencesController({
